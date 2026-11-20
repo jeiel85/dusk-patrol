@@ -1804,12 +1804,14 @@ function drawSky() {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
+const SOLID_SUN = [1.0, 0.78, 0.50], SOLID_AMB = [0.44, 0.42, 0.64];
+const JET_SUN = [1.0, 0.80, 0.55], JET_AMB = [0.58, 0.56, 0.74];
 function beginSolid() {
   gl.useProgram(solidProg);
   gl.uniformMatrix4fv(U(solidProg, 'uVP'), false, vpM);
   gl.uniform3fv(U(solidProg, 'uSun'), SUN_DIR);
-  gl.uniform3fv(U(solidProg, 'uSunColor'), [1.0, 0.78, 0.50]);
-  gl.uniform3fv(U(solidProg, 'uAmbient'), [0.44, 0.42, 0.64]);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), SOLID_SUN);
+  gl.uniform3fv(U(solidProg, 'uAmbient'), SOLID_AMB);
   gl.uniform3fv(U(solidProg, 'uFogColor'), FOG_COL);
   gl.uniform1f(U(solidProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(solidProg, 'uCam'), cam.pos);
@@ -1848,8 +1850,8 @@ function drawCity() {
   gl.useProgram(cityProg);
   gl.uniformMatrix4fv(U(cityProg, 'uVP'), false, vpM);
   gl.uniform3fv(U(cityProg, 'uSun'), SUN_DIR);
-  gl.uniform3fv(U(cityProg, 'uSunColor'), [1.0, 0.78, 0.50]);
-  gl.uniform3fv(U(cityProg, 'uAmbient'), [0.44, 0.42, 0.64]);
+  gl.uniform3fv(U(cityProg, 'uSunColor'), SOLID_SUN);
+  gl.uniform3fv(U(cityProg, 'uAmbient'), SOLID_AMB);
   gl.uniform3fv(U(cityProg, 'uFogColor'), FOG_COL);
   gl.uniform1f(U(cityProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cityProg, 'uCam'), cam.pos);
@@ -1862,8 +1864,8 @@ function drawJet() {
   const m = m4();
   planeMatrix(m, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
   beginSolid();
-  gl.uniform3fv(U(solidProg, 'uAmbient'), [0.58, 0.56, 0.74]);
-  gl.uniform3fv(U(solidProg, 'uSunColor'), [1.0, 0.80, 0.55]);
+  gl.uniform3fv(U(solidProg, 'uAmbient'), JET_AMB);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
   gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
   gl.bindVertexArray(jetMesh.vao);
@@ -1905,25 +1907,28 @@ function drawClouds() {
   gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
   gl.uniform1i(U(cloudProg, 'uTex'), 0);
+  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]); // same for every cloud
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
+  const tint = new Float32Array(3);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
     // Billboard spans -1..1 * (sx,sy); the diagonal is a safe culling radius.
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
-    const p = [cx, c.y, c.z];
-    const dir = vnorm(vsub(cam.pos, p));
-    let right = vcross([0, 1, 0], dir);
-    if (vlen(right) < 0.01) right = [1, 0, 0];
-    right = vnorm(right);
-    const up = [0, 1, 0];
-    cloudM[0] = right[0] * c.sx; cloudM[1] = right[1] * c.sx; cloudM[2] = right[2] * c.sx; cloudM[3] = 0;
-    cloudM[4] = up[0] * c.sy; cloudM[5] = up[1] * c.sy; cloudM[6] = up[2] * c.sy; cloudM[7] = 0;
+    // Billboard right = normalize(cross(worldUp, normalize(cam.pos - p))).
+    // cross with up kills the y component, so only x/z need to be normalized.
+    const dx = cam.pos[0] - cx, dy = cam.pos[1] - c.y, dz = cam.pos[2] - c.z;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    let rx = dz / dl, rz = -dx / dl;
+    let rl = Math.hypot(rx, rz);
+    if (rl < 0.01) { rx = 1; rz = 0; rl = 1; } else { rx /= rl; rz /= rl; }
+    cloudM[0] = rx * c.sx; cloudM[1] = 0; cloudM[2] = rz * c.sx; cloudM[3] = 0;
+    cloudM[4] = 0; cloudM[5] = c.sy; cloudM[6] = 0; cloudM[7] = 0;
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
-    cloudM[12] = p[0]; cloudM[13] = p[1]; cloudM[14] = p[2]; cloudM[15] = 1;
+    cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    gl.uniform3fv(U(cloudProg, 'uTint'), [1.0, 0.80 + Math.sin(c.drift) * 0.04, 0.68]);
-    gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
+    tint[0] = 1.0; tint[1] = 0.80 + Math.sin(c.drift) * 0.04; tint[2] = 0.68;
+    gl.uniform3fv(U(cloudProg, 'uTint'), tint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
