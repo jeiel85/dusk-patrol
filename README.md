@@ -14,7 +14,10 @@ python -m http.server 5173
 ```
 
 `game/index.html`을 브라우저에서 바로 열어도 동작합니다. WebGL2를 지원하는 브라우저가 필요합니다.
-루트 `index.html`은 소개와 라이브 데모를 담은 랜딩 페이지이며, GitHub Pages로도 배포됩니다.
+루트 `index.html`은 소개와 라이브 데모를 담은 랜딩 페이지이며 GitHub Pages로 배포됩니다.
+
+- 저장소: https://github.com/jeiel85/dusk-patrol
+- 라이브 데모: https://jeiel85.github.io/dusk-patrol/
 
 ## 조작
 
