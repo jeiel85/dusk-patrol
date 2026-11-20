@@ -1,0 +1,21 @@
+name: build-check
+
+# game/index.html is generated from game/src/ by build.mjs and committed so
+# GitHub Pages can serve it as-is. Fail when the two drift apart.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node build.mjs --check
