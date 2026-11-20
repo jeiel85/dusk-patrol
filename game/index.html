@@ -33,7 +33,6 @@ const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 const wrapAngle = a => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const mix = lerp;
 
 /* ---------- seeded rng ---------- */
 function mulberry32(a) {
@@ -44,7 +43,6 @@ function mulberry32(a) {
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-const rng = mulberry32(73129);
 
 /* ---------- value noise ---------- */
 function hash2(ix, iy) {
@@ -75,7 +73,6 @@ function ridged(x, y) {
 }
 
 /* ---------- vec3 ---------- */
-const v3 = (x, y, z) => [x, y, z];
 const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const vmul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
@@ -114,8 +111,6 @@ function m4look(o, eye, center, up) {
   o[12] = -vdot(x, eye); o[13] = -vdot(y, eye); o[14] = -vdot(z, eye); o[15] = 1;
   return o;
 }
-function m4trans(o, x, y, z) { m4id(o); o[12] = x; o[13] = y; o[14] = z; return o; }
-function m4scale(o, x, y, z) { m4id(o); o[0] = x; o[5] = y; o[10] = z; return o; }
 function m4rotY(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[0] = c; o[2] = -s; o[8] = s; o[10] = c; return o; }
 function m4rotX(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[5] = c; o[6] = s; o[9] = -s; o[10] = c; return o; }
 function m4rotZ(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[0] = c; o[1] = s; o[4] = -s; o[5] = c; return o; }
@@ -357,15 +352,40 @@ function buf(data, usage) {
   gl.bufferData(gl.ARRAY_BUFFER, data, usage || gl.STATIC_DRAW);
   return b;
 }
+// Float vertex attribute on the currently bound ARRAY_BUFFER.
+function attr(loc, size, stride, offset, divisor) {
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride || 0, offset || 0);
+  if (divisor) gl.vertexAttribDivisor(loc, divisor);
+}
+// Creates and binds a clamped 2D texture; the caller uploads the pixels.
+function makeTex(filter) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+// White sprite whose alpha comes from alphaAt(x, y) in 0..1.
+function spriteTex(S, alphaAt) {
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S), d = img.data;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = (y * S + x) * 4;
+    d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = clamp(alphaAt(x, y), 0, 1) * 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = makeTex(gl.NEAREST);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  return t;
+}
 const FS_TRI = new Float32Array([-1, -1, 3, -1, -1, 3]);
 
-const sceneTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+const sceneTex = makeTex(gl.NEAREST);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 const depthRb = gl.createRenderbuffer();
 gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
 gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
@@ -376,19 +396,15 @@ gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER,
 if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) showError('Scene framebuffer incomplete');
 gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-const heightTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, heightTex);
+const heightTex = makeTex(gl.LINEAR);
 gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 512, 512, 0, gl.RED, gl.UNSIGNED_BYTE, buildHeightData(512));
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
 /* ============================================================
    SHADERS — sky, water
    ============================================================ */
-const SKY_VS = `#version 300 es
+// Fullscreen-triangle vertex shader shared by the sky and post passes.
+const FS_VS = `#version 300 es
 layout(location=0) in vec2 aPos;
 out vec2 vUV;
 void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
@@ -546,7 +562,7 @@ in vec3 vW, vN, vC, vLocal, vSize;
 in float vSeed;
 out vec4 outColor;
 uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
-uniform float uFogDensity, uTime;
+uniform float uFogDensity;
 
 float h21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
 
@@ -686,11 +702,6 @@ void main(){
   outColor = vec4(col, a);
 }`;
 
-const POST_VS = `#version 300 es
-layout(location=0) in vec2 aPos;
-out vec2 vUV;
-void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }`;
-
 const POST_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
@@ -714,7 +725,7 @@ void main(){
   outColor = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
 
-const skyProg = makeProg(SKY_VS, SKY_FS, 'sky');
+const skyProg = makeProg(FS_VS, SKY_FS, 'sky');
 const waterProg = makeProg(WATER_VS, WATER_FS, 'water');
 const solidProg = makeProg(SOLID_VS, SOLID_FS, 'solid');
 const cityProg = makeProg(CITY_VS, CITY_FS, 'city');
@@ -722,7 +733,7 @@ const cloudProg = makeProg(CLOUD_VS, CLOUD_FS, 'cloud');
 const pointProg = makeProg(POINT_VS, POINT_FS, 'point');
 const partProg = makeProg(PART_VS, PART_FS, 'part');
 const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
-const postProg = makeProg(POST_VS, POST_FS, 'post');
+const postProg = makeProg(FS_VS, POST_FS, 'post');
 const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
 const FOG_COL = [0.80, 0.52, 0.44];
 const FOG_DENS = 0.00026;
@@ -734,8 +745,7 @@ const FOG_DENS = 0.00026;
 const fsVao = gl.createVertexArray();
 gl.bindVertexArray(fsVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, buf(FS_TRI));
-gl.enableVertexAttribArray(0);
-gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+attr(0, 2);
 
 /* water quad */
 const waterVao = gl.createVertexArray();
@@ -744,8 +754,7 @@ gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
   -7000, -7000, 7000, -7000, 7000, 7000,
   -7000, -7000, 7000, 7000, -7000, 7000
 ])));
-gl.enableVertexAttribArray(0);
-gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+attr(0, 2);
 gl.bindVertexArray(null);
 
 /* ---------- terrain ---------- */
@@ -799,79 +808,28 @@ for (let cj = 0; cj < TCH; cj++) {
       }
     }
     terrainChunks.push({
-      vao: null, first: floatStart / 3, count: (tOff - floatStart) / 3,
+      first: floatStart / 3, count: (tOff - floatStart) / 3,
       min: [-HALF + ci * TPC * TSTEP, minY - 3, -HALF + cj * TPC * TSTEP],
       max: [-HALF + (ci + 1) * TPC * TSTEP, maxY + 3, -HALF + (cj + 1) * TPC * TSTEP]
     });
   }
 }
-const tPosBuf = buf(tPos), tNorBuf = buf(tNor), tColBuf = buf(tCol);
-for (const ch of terrainChunks) {
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, tPosBuf);
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, ch.first * 12);
-  gl.bindBuffer(gl.ARRAY_BUFFER, tNorBuf);
-  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, ch.first * 12);
-  gl.bindBuffer(gl.ARRAY_BUFFER, tColBuf);
-  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, ch.first * 12);
-  ch.vao = vao;
-}
-gl.bindVertexArray(null);
-
-/* ---------- city cube + instances ---------- */
-function cubeFace(pos, nor, n, p0, p1, p2, p3) {
-  let a = p0, b = p1, c = p2, d = p3;
-  let ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
-  let vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-  if (nx * n[0] + ny * n[1] + nz * n[2] < 0) { const t = b; b = c; c = t; }
-  for (const p of [a, b, c, a, c, d]) {
-    pos.push(p[0], p[1], p[2]); nor.push(n[0], n[1], n[2]);
-  }
-}
-const cubePos = [], cubeNor = [];
-cubeFace(cubePos, cubeNor, [1, 0, 0], [1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]);
-cubeFace(cubePos, cubeNor, [-1, 0, 0], [0, 0, 0], [0, 1, 0], [0, 1, 1], [0, 0, 1]);
-cubeFace(cubePos, cubeNor, [0, 0, 1], [0, 0, 1], [0, 1, 1], [1, 1, 1], [1, 0, 1]);
-cubeFace(cubePos, cubeNor, [0, 0, -1], [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]);
-cubeFace(cubePos, cubeNor, [0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]);
-cubeFace(cubePos, cubeNor, [0, -1, 0], [0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]);
-
-const instData = new Float32Array(buildings.length * 10);
-for (let i = 0; i < buildings.length; i++) {
-  const b = buildings[i], o = i * 10;
-  instData[o] = b.x - b.w / 2; instData[o + 1] = 11; instData[o + 2] = b.z - b.d / 2;
-  instData[o + 3] = b.w; instData[o + 4] = b.h; instData[o + 5] = b.d;
-  instData[o + 6] = b.seed;
-  instData[o + 7] = b.wall[0]; instData[o + 8] = b.wall[1]; instData[o + 9] = b.wall[2];
-}
-const cityVao = gl.createVertexArray();
-gl.bindVertexArray(cityVao);
-gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cubePos)));
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cubeNor)));
-gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
-gl.bindBuffer(gl.ARRAY_BUFFER, buf(instData));
-const IS = 40;
-gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, IS, 0); gl.vertexAttribDivisor(2, 1);
-gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, IS, 12); gl.vertexAttribDivisor(3, 1);
-gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, IS, 24); gl.vertexAttribDivisor(4, 1);
-gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 3, gl.FLOAT, false, IS, 28); gl.vertexAttribDivisor(5, 1);
+// One VAO over the shared buffers: each chunk draws its own [first, count) range.
+const terrainVao = gl.createVertexArray();
+gl.bindVertexArray(terrainVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(tPos)); attr(0, 3);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(tNor)); attr(1, 3);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(tCol)); attr(2, 3);
 gl.bindVertexArray(null);
 
 /* ---------- cloud textures ---------- */
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 function makeCloudTexture(seed) {
-  const S = 64;
-  const c = document.createElement('canvas'); c.width = c.height = S;
-  const ctx = c.getContext('2d');
-  const img = ctx.createImageData(S, S), d = img.data;
-  const r = mulberry32(seed);
+  const S = 64, r = mulberry32(seed);
   const blobs = [];
   const nb = 5 + ((r() * 4) | 0);
   for (let i = 0; i < nb; i++) blobs.push([0.18 + r() * 0.64, 0.30 + r() * 0.42, 0.12 + r() * 0.17]);
-  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+  return spriteTex(S, (x, y) => {
     const nx = x / S, ny = y / S;
     let f = 0;
     for (const b of blobs) {
@@ -879,20 +837,9 @@ function makeCloudTexture(seed) {
       f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
     }
     f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
-    const b = (bayer[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
-    const a = f > 0.30 ? 1 : (f > 0.255 && b > 0 ? 1 : 0);
-    const i = (y * S + x) * 4;
-    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = a ? 255 : 0;
-  }
-  ctx.putImageData(img, 0, 0);
-  const t = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return t;
+    const b = (BAYER4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
+    return f > 0.30 || (f > 0.255 && b > 0) ? 1 : 0;
+  });
 }
 const cloudTexes = [makeCloudTexture(11), makeCloudTexture(29), makeCloudTexture(53), makeCloudTexture(97)];
 
@@ -902,8 +849,8 @@ gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
   -1, -1, 0, 0, 0, 1, -1, 0, 1, 0, 1, 1, 0, 1, 1,
   -1, -1, 0, 0, 0, 1, 1, 0, 1, 1, -1, 1, 0, 0, 1
 ])));
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
-gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
+attr(0, 3, 20, 0);
+attr(1, 2, 20, 12);
 gl.bindVertexArray(null);
 
 /* ---------- mesh builder ---------- */
@@ -929,15 +876,40 @@ MeshBuilder.prototype.quad = function (a, b, c, d, col, hint) {
 MeshBuilder.prototype.build = function () {
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.p)));
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.n)));
-  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.c)));
-  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.p))); attr(0, 3);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.n))); attr(1, 3);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.c))); attr(2, 3);
   gl.bindVertexArray(null);
   return { vao, count: this.p.length / 3 };
 };
+
+/* ---------- city: one unit cube instanced per building ---------- */
+const cube = new MeshBuilder();
+const CUBE_FACES = [ // outward normal, then the four corners of the face
+  [[1, 0, 0], [1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]],
+  [[-1, 0, 0], [0, 0, 0], [0, 1, 0], [0, 1, 1], [0, 0, 1]],
+  [[0, 0, 1], [0, 0, 1], [0, 1, 1], [1, 1, 1], [1, 0, 1]],
+  [[0, 0, -1], [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]],
+  [[0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]],
+  [[0, -1, 0], [0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]]
+];
+for (const [n, a, b, c, d] of CUBE_FACES) cube.quad(a, b, c, d, n, n);
+
+const instData = new Float32Array(buildings.length * 10);
+for (let i = 0; i < buildings.length; i++) {
+  const b = buildings[i], o = i * 10;
+  instData.set([b.x - b.w / 2, 11, b.z - b.d / 2, b.w, b.h, b.d, b.seed, b.wall[0], b.wall[1], b.wall[2]], o);
+}
+const cityVao = gl.createVertexArray();
+gl.bindVertexArray(cityVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cube.p))); attr(0, 3);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cube.n))); attr(1, 3);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(instData));
+attr(2, 3, 40, 0, 1);  // offset
+attr(3, 3, 40, 12, 1); // size
+attr(4, 1, 40, 24, 1); // window seed
+attr(5, 3, 40, 28, 1); // wall colour
+gl.bindVertexArray(null);
 
 /* ---------- jet ---------- */
 const JET_LIGHT = rgb('#c3cee2'), JET_MID = rgb('#8e9ab6'), JET_DARK = rgb('#5b647d');
@@ -1087,87 +1059,58 @@ drone.tri([0, 1.05, 0], [1.6, 0.86, -1.2], [-1.6, 0.86, -1.2], JET_ORANGE, [0, 1
 const droneMesh = drone.build();
 
 /* ---------- afterburner cones ---------- */
-const burnPos = [], burnT = [];
-function addBurnCone(cx, cy, r) {
-  const segs = 9;
+// Two cones behind the nozzles; each vertex is x, y, z (0 = nozzle, 1 = tip), t.
+const burnData = [];
+for (const cx of [0.44, -0.44]) {
+  const cy = 0.02, r = 0.27, segs = 9;
   for (let i = 0; i < segs; i++) {
     const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
-    burnPos.push(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0);
-    burnPos.push(cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0);
-    burnPos.push(cx, cy, 1);
-    burnT.push(0, 0, 1);
+    burnData.push(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0, 0,
+      cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0, 0,
+      cx, cy, 1, 1);
   }
 }
-addBurnCone(0.44, 0.02, 0.27); addBurnCone(-0.44, 0.02, 0.27);
+const burnCount = burnData.length / 4;
 const burnVao = gl.createVertexArray();
 gl.bindVertexArray(burnVao);
-{
-  const inter = new Float32Array(burnT.length * 4);
-  for (let i = 0; i < burnT.length; i++) {
-    inter[i * 4] = burnPos[i * 3]; inter[i * 4 + 1] = burnPos[i * 3 + 1]; inter[i * 4 + 2] = burnPos[i * 3 + 2]; inter[i * 4 + 3] = burnT[i];
-  }
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf(inter));
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
-  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
-}
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(burnData)));
+attr(0, 3, 16, 0);
+attr(1, 1, 16, 12);
 gl.bindVertexArray(null);
-const burnCount = burnT.length;
 
 /* ---------- puff textures ---------- */
 function makePuffTex(glow) {
   const S = 32;
-  const c = document.createElement('canvas'); c.width = c.height = S;
-  const ctx = c.getContext('2d');
-  const img = ctx.createImageData(S, S), d = img.data;
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const dx = (x + 0.5) / S * 2 - 1, dy = (y + 0.5) / S * 2 - 1;
-    const r = Math.min(1, Math.hypot(dx, dy));
-    let a = 1 - r;
-    a = glow ? Math.pow(a, 2.1) : Math.pow(a, 1.15) * (0.55 + 0.45 * vnoise(x * 0.55 + 3, y * 0.55 + 7));
-    const i = (y * S + x) * 4;
-    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = clamp(a, 0, 1) * 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  const t = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, t);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return t;
+  return spriteTex(S, (x, y) => {
+    const a = 1 - Math.min(1, Math.hypot((x + 0.5) / S * 2 - 1, (y + 0.5) / S * 2 - 1));
+    return glow ? Math.pow(a, 2.1) : Math.pow(a, 1.15) * (0.55 + 0.45 * vnoise(x * 0.55 + 3, y * 0.55 + 7));
+  });
 }
 const smokeTex = makePuffTex(false);
 const glowTex = makePuffTex(true);
 
-/* ---------- dynamic point buffer ---------- */
-const POINT_MAX = 900;
-const pointData = new Float32Array(POINT_MAX * 8);
-const pointVao = gl.createVertexArray();
-const pointVbo = gl.createBuffer();
-gl.bindVertexArray(pointVao);
-gl.bindBuffer(gl.ARRAY_BUFFER, pointVbo);
-gl.bufferData(gl.ARRAY_BUFFER, pointData.byteLength, gl.DYNAMIC_DRAW);
-gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
-gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 32, 12);
-gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 32, 24);
-gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 32, 28);
-gl.bindVertexArray(null);
-
-/* ---------- dynamic particle buffers ---------- */
-function makeParticleVAO(max) {
-  const data = new Float32Array(max * 60);
+/* ---------- dynamic vertex buffers ---------- */
+// layout: [location, size] pairs, packed back to back as floats.
+function makeDynamic(floats, layout) {
+  const data = new Float32Array(floats);
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
   gl.bindVertexArray(vao);
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
   gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
-  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0);
-  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 40, 12);
-  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 40, 20);
-  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 40, 36);
+  const stride = layout.reduce((s, l) => s + l[1], 0) * 4;
+  let off = 0;
+  for (const [loc, size] of layout) { attr(loc, size, stride, off); off += size * 4; }
   gl.bindVertexArray(null);
-  return { vao, vbo, data, max };
+  return { vao, vbo, data };
+}
+// Points: pos3, colour3, size (negative = blinking), phase.
+const POINT_MAX = 900;
+const { vao: pointVao, vbo: pointVbo, data: pointData } =
+  makeDynamic(POINT_MAX * 8, [[0, 3], [1, 3], [2, 1], [3, 1]]);
+// Particles: six billboard corners of centre3, corner2, rgba4, size.
+function makeParticleVAO(max) {
+  return Object.assign(makeDynamic(max * 60, [[0, 3], [1, 2], [2, 4], [3, 1]]), { max });
 }
 const smokeBatch = makeParticleVAO(240);
 const glowBatch = makeParticleVAO(260);
@@ -1390,8 +1333,8 @@ const audio = {
    GAME STATE
    ============================================================ */
 const game = {
-  state: 'title', time: 0, timer: 120, score: 0, best: 0, newBest: false,
-  camMode: 0, camAngle: 0, shake: 0, msg: '', msgT: 0,
+  state: 'title', time: 0, timer: 120, score: 0, kills: 0, best: 0, newBest: false,
+  camMode: 0, camAngle: 0, shake: 0, lock: null,
   fps: 60, debug: location.search.indexOf('debug') >= 0
 };
 try { game.best = parseInt(localStorage.getItem('duskPatrolBest') || '0', 10) || 0; } catch (e) { }
@@ -1399,7 +1342,7 @@ try { game.best = parseInt(localStorage.getItem('duskPatrolBest') || '0', 10) ||
 const START = [coastX(1060) - 160, 205, 1060];
 const plane = {
   pos: START.slice(), yaw: 0, pitch: 0, roll: 0, barrel: 0, barrelT: 0,
-  speed: 175, boost: 0, alive: true, respawn: 0, throttle: 0.62,
+  speed: 175, boost: 0, alive: true, respawn: 0, throttle: 0.62, agl: 200, edge: 0,
   inPitch: 0, inYaw: 0, inRoll: 0
 };
 const cam = { pos: [0, 0, 0], look: [0, 0, 1], up: [0, 1, 0], snap: true };
@@ -1468,7 +1411,7 @@ function killDrone(d) {
   if (!d.alive) return;
   d.alive = false; d.respawn = 13 + Math.random() * 5;
   explode(d.pos, 1.0);
-  game.score += 100;
+  game.score += 100; game.kills++;
   pops.push({ p: d.pos.slice(), text: '+100', t: 1.3 });
   game.shake = Math.max(game.shake, 0.35);
   audio.explosion();
@@ -1484,9 +1427,26 @@ function updateDrones(dt) {
       }
       continue;
     }
+    // Slow patrol circle around the home point, bobbing gently.
+    const a = game.time * 0.22 + d.phase;
     d.rot += dt * 0.8;
+    d.pos[0] = d.home[0] + Math.cos(a) * 55;
     d.pos[1] = d.home[1] + Math.sin(game.time * 1.2 + d.phase) * 5;
+    d.pos[2] = d.home[2] + Math.sin(a) * 55;
   }
+}
+
+// Missiles home on the drone nearest the nose inside a ~31° cone; the HUD
+// uses the same test so a LOCK marker always means the missile will track.
+const LOCK_COS = 0.86;
+function lockTarget(from, fwd) {
+  let target = null, best = LOCK_COS;
+  for (const d of drones) {
+    if (!d.alive) continue;
+    const dd = vdot(fwd, vnorm(vsub(d.pos, from)));
+    if (dd > best) { best = dd; target = d; }
+  }
+  return target;
 }
 
 /* ---------- missiles ---------- */
@@ -1497,13 +1457,7 @@ function fireMissile() {
   const fwd = flightForward();
   const p = vadd(vadd(plane.pos, vmul(right, 3.2 * missileSide)), vadd(vmul(up, -0.28), vmul(fwd, 1.0)));
   missileSide *= -1;
-  let target = null, best = 0.86;
-  for (const d of drones) {
-    if (!d.alive) continue;
-    const dir = vnorm(vsub(d.pos, p)), dd = vdot(fwd, dir);
-    if (dd > best) { best = dd; target = d; }
-  }
-  missiles.push({ p, v: vmul(fwd, 420), life: 5, trail: 0, target });
+  missiles.push({ p, v: vmul(fwd, 420), life: 5, trail: 0, target: lockTarget(p, fwd) });
   mslAmmo--; mslCd = 0.42;
   game.shake = Math.max(game.shake, 0.22);
   audio.missile();
@@ -1526,9 +1480,11 @@ function updateMissiles(dt) {
       spawnSmoke(vadd(m.p, vmul(vnorm(m.v), -1.2)), [0, 1.2, 0], 1.6, 0.7, [0.72, 0.66, 0.62], 9, 0.5);
       m.trail = 0.026;
     }
+    // Proximity fuse: any drone in range is hit, not only the locked one.
+    const hit = drones.find(d => d.alive && vdist(m.p, d.pos) < 18);
     let dead = false;
-    if (m.target && m.target.alive && vdist(m.p, m.target.pos) < 18) {
-      killDrone(m.target); dead = true;
+    if (hit) {
+      killDrone(hit); dead = true;
     } else if (m.p[1] < Math.max(terrainHeight(m.p[0], m.p[2]), 0) + 1) {
       explode(m.p, 0.7); audio.explosion(); dead = true;
     } else if (m.life <= 0) {
@@ -1544,7 +1500,7 @@ function crash() {
   if (game.camMode === 1) { game.camMode = 0; cam.snap = true; }
   plane.alive = false; plane.respawn = 2.0;
   explode(plane.pos, 1.8);
-  game.shake = 1.2; game.msg = 'CRASHED'; game.msgT = 2.0;
+  game.shake = 1.2; game.lock = null;
   audio.explosion();
 }
 function respawnPlane() {
@@ -1606,10 +1562,18 @@ function updatePlane(dt) {
 
   if (plane.boost > 0.5) game.shake = Math.max(game.shake, 0.05);
   const gh = Math.max(terrainHeight(plane.pos[0], plane.pos[2]), 0);
-  if (plane.pos[1] < gh + 3.2) crash();
-  if (Math.abs(plane.pos[0]) > 6200 || Math.abs(plane.pos[2]) > 6200) crash();
+  plane.agl = plane.pos[1] - gh;
+  plane.edge = Math.max(Math.abs(plane.pos[0]), Math.abs(plane.pos[2]));
+  if (plane.agl < 3.2) crash();
+  if (plane.edge > BOUNDARY) crash();
+  if (!plane.alive) return;
   audio.update(plane.speed, plane.boost);
+
+  const lock = lockTarget(plane.pos, fwd);
+  if (lock && lock !== game.lock) audio.beep(1180);
+  game.lock = lock;
 }
+const BOUNDARY = 6200, BOUNDARY_WARN = 5400;
 
 function updateTitlePlane() {
   const a = game.time * 0.075, R = 780;
@@ -1696,8 +1660,8 @@ function updateCamera(dt) {
 /* ---------- state transitions ---------- */
 function startGame() {
   game.state = 'play';
-  game.timer = 120; game.score = 0; game.camMode = 0; game.newBest = false;
-  game.shake = 0; game.msg = ''; game.msgT = 0; game.camAngle = 0;
+  game.timer = 120; game.score = 0; game.kills = 0; game.camMode = 0; game.newBest = false;
+  game.shake = 0; game.lock = null; game.camAngle = 0;
   mslAmmo = 8; mslCd = 0; mslReload = 0; missileSide = 1;
   missiles.length = 0; smokeP.length = 0; glowP.length = 0; pops.length = 0;
   resetDrones(); respawnPlane();
@@ -1717,7 +1681,7 @@ function endGame() {
 function onEnter() {
   audio.init();
   if (game.state === 'title' || game.state === 'results') startGame();
-  else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
+  else if (game.state === 'pause') togglePause();
 }
 function restart() {
   audio.init();
@@ -1739,14 +1703,15 @@ function cycleCamera() { setCamera((game.camMode + 1) % 3); }
 function update(dt) {
   game.time += dt;
   game.shake = Math.max(0, game.shake - dt * 1.7);
-  if (game.msgT > 0) game.msgT -= dt;
 
   if (game.state === 'title') {
     updateTitlePlane();
     updateDrones(dt);
     updateParticles(dt);
   } else if (game.state === 'play') {
+    const sec = Math.ceil(game.timer);
     game.timer -= dt;
+    if (game.timer > 0 && game.timer <= 10 && Math.ceil(game.timer) < sec) audio.beep(990); // final countdown tick
     updatePlane(dt);
     updateDrones(dt);
     updateMissiles(dt);
@@ -1763,8 +1728,7 @@ function update(dt) {
    RENDER — scene
    ============================================================ */
 const IDENT = m4id(m4());
-const dext = m4(), dj = m4(), dk = m4();
-const cloudM = m4();
+const droneM = m4(), jetM = m4(), cloudM = m4();
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
 const camRight = [1, 0, 0], camUp = [0, 1, 0];
 
@@ -1804,9 +1768,9 @@ function drawTerrain() {
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, IDENT);
   updateFrustum(vpM);
   game.visibleChunks = 0;
+  gl.bindVertexArray(terrainVao);
   for (const ch of terrainChunks) {
     if (!boxInFrustum(ch.min, ch.max)) continue;
-    gl.bindVertexArray(ch.vao);
     gl.drawArrays(gl.TRIANGLES, ch.first, ch.count);
     game.visibleChunks++;
   }
@@ -1842,8 +1806,7 @@ function drawCity() {
 }
 
 function drawJet() {
-  const m = m4();
-  planeMatrix(m, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
   beginSolid();
   gl.uniform3fv(U(solidProg, 'uAmbient'), JET_AMB);
   gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
@@ -1870,13 +1833,12 @@ function drawJet() {
 
 function drawDrones() {
   beginSolid();
+  gl.bindVertexArray(droneMesh.vao);
   for (const d of drones) {
     if (!d.alive) continue;
-    m4trans(dext, d.pos[0], d.pos[1], d.pos[2]);
-    m4rotY(dj, d.rot);
-    m4mul(dk, dext, dj);
-    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, dk);
-    gl.bindVertexArray(droneMesh.vao);
+    m4rotY(droneM, d.rot);
+    droneM[12] = d.pos[0]; droneM[13] = d.pos[1]; droneM[14] = d.pos[2];
+    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, droneM);
     gl.drawArrays(gl.TRIANGLES, 0, droneMesh.count);
   }
 }
@@ -2091,25 +2053,26 @@ function bestTarget() {
   for (const d of drones) {
     if (!d.alive) continue;
     const to = vsub(d.pos, cam.pos), dist = vlen(to);
-    const dd = vdot(fwd, vscale(to, 1 / Math.max(dist, 0.001)));
+    const dd = vdot(fwd, vmul(to, 1 / Math.max(dist, 0.001)));
     if (dd > bestDot && dist < bestDist) { bestDot = dd; best = d; bestDist = dist; }
   }
   return best ? { d: best, dist: bestDist } : null;
 }
-function vscale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
 
+// Missile lock (red, "LOCK") wins over the nearest drone in view (amber).
 function drawTargetBox() {
-  const t = bestTarget();
+  const lock = game.lock && game.lock.alive ? game.lock : null;
+  const t = lock ? { d: lock, dist: vdist(lock.pos, plane.pos) } : bestTarget();
   if (!t) return;
   const p = projPoint(vpM, t.d.pos);
   if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > H - 22) return;
-  const x = Math.round(p[0]), y = Math.round(p[1]), s = 7;
-  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  const x = Math.round(p[0]), y = Math.round(p[1]), s = lock ? 6 : 7;
+  hud.fillStyle = lock ? 'rgba(255,90,95,0.95)' : 'rgba(255,180,92,0.95)';
   hud.fillRect(x - s, y - s, 4, 1); hud.fillRect(x - s, y - s, 1, 4);
   hud.fillRect(x + s - 3, y - s, 4, 1); hud.fillRect(x + s, y - s, 1, 4);
   hud.fillRect(x - s, y + s, 4, 1); hud.fillRect(x - s, y + s - 3, 1, 4);
   hud.fillRect(x + s - 3, y + s, 4, 1); hud.fillRect(x + s, y + s - 3, 1, 4);
-  drawTextC('DRONE ' + (t.dist / 1000).toFixed(1) + 'KM', x, y + 11, COL.amber, 1, 0);
+  drawTextC((lock ? 'LOCK ' : 'DRONE ') + (t.dist / 1000).toFixed(1) + 'KM', x, y + 11, lock ? COL.red : COL.amber, 1, 0);
 }
 
 function drawOffscreenArrow() {
@@ -2226,15 +2189,23 @@ function drawPlayHUD() {
 
   const camName = ['CHASE', 'FPV', 'CINEMA'][game.camMode];
   drawTextSh('DP ' + camName + ' ' + (game.camMode + 1) + '/3', 8, 6, COL.dim, 1, 0);
-  drawTextC(fmtTime(game.timer), 240, 4, COL.amber, 2, 0);
+  const hurry = game.timer <= 10;
+  drawTextC(fmtTime(game.timer), 240, 4, hurry && blinkOn(6) ? COL.red : COL.amber, 2, 0);
   drawTextR('SCORE ' + pad(game.score, 6), 472, 6, COL.bone, 1, 0);
 
   drawTextSh('SPD ' + pad(plane.speed * 1.94, 3), 8, 258, COL.amber, 1, 0);
   drawTextSh('ALT ' + pad(plane.pos[1], 4), 86, 258, COL.bone, 1, 0);
-  drawTextR('MSL ' + mslAmmo + '/8', 472, 258, COL.bone, 1, 0);
+  drawTextR('MSL ' + mslAmmo + '/8', 472, 258, mslAmmo ? COL.bone : COL.red, 1, 0);
 
-  if (Math.abs(plane.pitch) > 2.0) drawTextC('INVERTED', 240, 28, COL.amber, 1, 0);
-  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  P ' + Math.round(plane.pitch * DEG) + '  R ' + Math.round(plane.roll * DEG) + '  CH ' + game.visibleChunks + '/64', 8, 220, COL.dim, 1, 0);
+  if (plane.alive) {
+    // Warnings stack under the timer, most urgent first.
+    let wy = 28;
+    const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
+    if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
+    if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);
+    if (Math.abs(plane.pitch) > 2.0) warn('INVERTED', COL.amber);
+  }
+  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  P ' + Math.round(plane.pitch / DEG) + '  R ' + Math.round(plane.roll / DEG) + '  CH ' + game.visibleChunks + '/64', 8, 220, COL.dim, 1, 0);
 
   drawReticle();
   if (game.camMode === 1 && plane.alive) drawCockpitProjector();
@@ -2244,9 +2215,6 @@ function drawPlayHUD() {
   if (!plane.alive) {
     drawTextC('CRASHED', 240, 108, COL.red, 2, 1);
     drawTextC('RESPAWNING', 240, 140, COL.bone, 1, 1);
-  }
-  if (game.msgT > 0 && game.msg === 'CRASHED' && plane.alive) {
-    drawTextC('SIGNAL LOST', 240, 108, COL.red, 1, 1);
   }
   drawPops();
 }
@@ -2274,7 +2242,7 @@ function renderHUD() {
     hud.fillRect(150, 92, 180, 1);
     drawTextC('SCORE  ' + pad(game.score, 6), 240, 104, COL.bone, 1, 0);
     drawTextC('BEST   ' + pad(game.best, 6), 240, 118, COL.amber, 1, 0);
-    drawTextC('DRONES DOWN  ' + (drones.length - drones.filter(d => d.alive).length) + '/8', 240, 134, COL.dim, 1, 0);
+    drawTextC('DRONES DOWN  ' + game.kills, 240, 134, COL.dim, 1, 0);
     if (game.newBest && game.score > 0) drawTextC('NEW BEST', 240, 148, COL.amber, 1, 0);
     if (blinkOn(3.4)) drawTextC('PRESS ENTER TO FLY AGAIN', 240, 164, COL.bone, 1, 1);
   }
