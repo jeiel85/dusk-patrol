@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DUSK PATROL — 노을진 해안 상공의 픽셀 전투기</title>
+<meta name="description" content="WebGL2로 만든 480×270 픽셀 아트 전투기 게임. 360도 루프, 조종석 1인칭 시점, 120초 드론 격추 미션. 설치 없이 브라우저에서 바로 플레이.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="DUSK PATROL">
+<meta property="og:description" content="노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. 키보드만으로 즐기는 픽셀 아트 플라이트 액션.">
+<style>
+  :root{
+    --ink:#07060c;
+    --panel:#12101d;
+    --panel-2:#191528;
+    --line:rgba(242,230,208,.14);
+    --bone:#f2e6d0;
+    --dim:#948ba3;
+    --amber:#ffb45c;
+    --amber-soft:rgba(255,180,92,.16);
+    --teal:#5ee0d0;
+    --plum:#3a2442;
+    --mono:ui-monospace,"SFMono-Regular",Consolas,"Courier New",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--ink);
+    color:var(--bone);
+    font-family:var(--sans);
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit}
+  :focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+
+  /* ---------- dusk sky ---------- */
+  .sky{
+    position:relative;
+    overflow:hidden;
+    padding:0 0 118px;
+    background:
+      radial-gradient(120% 70% at 74% 14%, rgba(255,180,92,.28), transparent 58%),
+      radial-gradient(90% 60% at 18% 4%, rgba(94,224,208,.10), transparent 62%),
+      linear-gradient(180deg,#100b1c 0%,#241634 38%,#5a2f45 68%,#a2554d 88%,#e48a55 100%);
+  }
+  .sky::before{
+    /* the stepped sunset sun */
+    content:"";
+    position:absolute;
+    top:118px; left:50%; transform:translateX(-50%);
+    width:260px; height:260px;
+    background:linear-gradient(180deg,#ffd08a,#ff9d5c 60%,#e46b4f);
+    clip-path:polygon(0 0,100% 0,100% 100%,0 100%);
+    border-radius:0;
+    opacity:.16;
+    filter:blur(1px);
+    pointer-events:none;
+  }
+  .stars{
+    position:absolute; inset:0;
+    background-image:
+      radial-gradient(1px 1px at 12% 18%,rgba(242,230,208,.55),transparent),
+      radial-gradient(1px 1px at 28% 9%,rgba(242,230,208,.35),transparent),
+      radial-gradient(1px 1px at 61% 22%,rgba(242,230,208,.45),transparent),
+      radial-gradient(1px 1px at 83% 12%,rgba(242,230,208,.35),transparent),
+      radial-gradient(1px 1px at 92% 31%,rgba(242,230,208,.30),transparent),
+      radial-gradient(1px 1px at 41% 30%,rgba(242,230,208,.25),transparent);
+    pointer-events:none;
+  }
+  .skyline{
+    position:absolute; left:0; right:0; bottom:0; height:190px;
+    background:
+      repeating-linear-gradient(90deg,transparent 0 7px,rgba(255,180,92,.20) 7px 8px),
+      repeating-linear-gradient(0deg,transparent 0 10px,rgba(255,180,92,.13) 10px 11px),
+      #0b0812;
+    clip-path:polygon(0 100%,0 62%,4% 62%,4% 45%,7% 45%,7% 71%,10% 71%,10% 34%,14% 34%,14% 55%,17% 55%,17% 22%,21% 22%,21% 49%,24% 49%,24% 64%,28% 64%,28% 39%,32% 39%,32% 15%,36% 15%,36% 52%,39% 52%,39% 30%,43% 30%,43% 58%,47% 58%,47% 26%,51% 26%,51% 47%,55% 47%,55% 68%,59% 68%,59% 37%,63% 37%,63% 19%,67% 19%,67% 54%,71% 54%,71% 41%,75% 41%,75% 63%,79% 63%,79% 28%,83% 28%,83% 50%,87% 50%,87% 36%,91% 36%,91% 59%,95% 59%,95% 44%,100% 44%,100% 100%);
+    pointer-events:none;
+  }
+  .skyline.back{
+    height:238px; opacity:.42; filter:blur(1px);
+    background:#2a1b34;
+    clip-path:polygon(0 100%,0 70%,6% 70%,6% 52%,11% 52%,11% 75%,16% 75%,16% 40%,22% 40%,22% 62%,29% 62%,29% 31%,35% 31%,35% 66%,42% 66%,42% 44%,48% 44%,48% 72%,55% 72%,55% 35%,61% 35%,61% 58%,68% 58%,68% 47%,74% 47%,74% 69%,81% 69%,81% 38%,88% 38%,88% 61%,94% 61%,94% 49%,100% 49%,100% 100%);
+  }
+
+  /* ---------- shell ---------- */
+  .wrap{width:min(1120px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
+  .kicker{
+    font:700 11px/1 var(--mono);
+    letter-spacing:.32em;
+    text-transform:uppercase;
+    color:var(--amber);
+  }
+  .hero{padding:74px 0 40px;max-width:760px}
+  h1{
+    font:900 clamp(54px,10vw,116px)/.92 var(--mono);
+    letter-spacing:-.05em;
+    margin:22px 0 18px;
+    color:var(--bone);
+    text-shadow:3px 3px 0 rgba(228,107,79,.75),6px 6px 0 rgba(58,36,66,.75);
+  }
+  .hero p.lead{font-size:clamp(16px,2.2vw,20px);color:#ffead6;max-width:620px;margin:0 0 22px}
+  .hero p.sub{color:#d8c9c2;max-width:600px;margin:0 0 30px;font-size:15px}
+  .actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .btn{
+    display:inline-flex;align-items:center;gap:9px;
+    font:700 13px/1 var(--mono);
+    letter-spacing:.05em;
+    text-transform:uppercase;
+    padding:14px 20px;
+    border:2px solid var(--amber);
+    background:var(--amber);color:#1a0f14;
+    text-decoration:none;
+    box-shadow:4px 4px 0 rgba(228,107,79,.8);
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  .btn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 rgba(228,107,79,.8)}
+  .btn.ghost{background:transparent;color:var(--bone);border-color:var(--line);box-shadow:none}
+  .btn.ghost:hover{border-color:var(--teal);color:var(--teal)}
+  .facts{display:flex;flex-wrap:wrap;gap:18px;margin-top:26px;padding:0;list-style:none}
+  .facts li{
+    font:700 10px/1.4 var(--mono);
+    letter-spacing:.14em;text-transform:uppercase;color:#e9d8c8;
+    padding-left:14px;border-left:2px solid var(--amber);
+  }
+
+  /* ---------- live demo console ---------- */
+  .demo-block{position:relative;padding-bottom:76px}
+  .demo-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+  .section-label{
+    font:700 11px/1 var(--mono);
+    letter-spacing:.32em;text-transform:uppercase;color:var(--amber);
+    display:flex;align-items:center;gap:10px;
+  }
+  .live-dot{width:7px;height:7px;background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .console{
+    position:relative;
+    border:1px solid rgba(255,180,92,.38);
+    background:var(--panel);
+    box-shadow:0 0 0 5px rgba(7,6,12,.9),0 30px 80px rgba(0,0,0,.6);
+  }
+  .console::before,.console::after{
+    content:"";position:absolute;width:18px;height:18px;z-index:3;pointer-events:none;
+    border-color:var(--amber);border-style:solid;
+  }
+  .console::before{top:-2px;left:-2px;border-width:3px 0 0 3px}
+  .console::after{bottom:-2px;right:-2px;border-width:0 3px 3px 0}
+  .console-bar{
+    display:flex;align-items:center;gap:12px;
+    padding:10px 14px;border-bottom:1px solid rgba(255,180,92,.22);
+    background:linear-gradient(90deg,rgba(255,180,92,.1),transparent);
+    font:700 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:#e9c9a8;
+  }
+  .dots{display:flex;gap:5px}
+  .dots i{width:7px;height:7px;background:rgba(242,230,208,.35);display:block}
+  .dots i:first-child{background:var(--amber)}
+  .console-bar .spacer{flex:1}
+  .fs-btn{
+    border:1px solid var(--line);background:transparent;color:var(--bone);
+    font:700 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    padding:7px 10px;cursor:pointer;
+  }
+  .fs-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .screen{position:relative;aspect-ratio:16/9;background:#07060c;overflow:hidden}
+  .screen iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:#07060c}
+  .screen::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,.13) 0 1px,transparent 1px 3px);
+    mix-blend-mode:multiply;
+  }
+  .demo-hint{
+    display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;
+    padding:12px 14px;border-top:1px solid rgba(255,180,92,.22);
+    color:#c9b8ae;font:500 12px/1.5 var(--mono);
+  }
+  kbd{
+    display:inline-block;font:700 11px/1 var(--mono);
+    border:1px solid rgba(242,230,208,.4);border-bottom-width:2px;
+    padding:4px 6px;color:var(--bone);background:rgba(242,230,208,.06);
+  }
+
+  /* ---------- content sections ---------- */
+  section.body{padding:66px 0;border-top:1px solid var(--line)}
+  section.body .intro{max-width:660px;margin-bottom:36px}
+  h2{
+    font:800 clamp(26px,4vw,40px)/1.1 var(--mono);
+    letter-spacing:-.03em;margin:14px 0 12px;color:var(--bone);
+  }
+  .intro p{color:var(--dim);margin:0}
+  .cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .card{
+    background:linear-gradient(160deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);
+    padding:24px 24px 22px;
+    transition:border-color .15s ease,transform .15s ease;
+  }
+  .card:hover{border-color:rgba(255,180,92,.5);transform:translateY(-3px)}
+  .card .tag{font:700 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--teal)}
+  .card h3{font:800 19px/1.2 var(--mono);margin:12px 0 8px;color:var(--bone)}
+  .card p{margin:0;color:var(--dim);font-size:14px}
+
+  .keys{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:10px 26px}
+  .keyrow{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .keyrow .keyset{display:flex;gap:4px;min-width:92px}
+  .keyrow span{color:#cfc1b9;font-size:14px}
+
+  .tech{
+    display:flex;flex-wrap:wrap;gap:10px;list-style:none;padding:0;margin:0;
+  }
+  .tech li{
+    font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    border:1px solid var(--line);padding:10px 12px;color:#c9b8ae;
+  }
+  footer{
+    border-top:1px solid var(--line);padding:34px 0 46px;
+    color:var(--dim);font:500 12px/1.8 var(--mono);
+    display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  }
+  footer a{color:var(--amber);text-decoration:none}
+  footer a:hover{text-decoration:underline}
+
+  @media(max-width:760px){
+    .hero{padding:52px 0 30px}
+    .cards{grid-template-columns:1fr}
+    .console-bar .spacer{display:none}
+    .skyline{height:130px}
+    .skyline.back{height:170px}
+    .sky{padding-bottom:90px}
+  }
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+
+<header class="sky">
+  <div class="stars"></div>
+  <div class="skyline back"></div>
+  <div class="skyline"></div>
+  <div class="wrap">
+    <div class="hero">
+      <div class="kicker">Pixel patrol / web arcade</div>
+      <h1>DUSK<br>PATROL</h1>
+      <p class="lead">노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요.</p>
+      <p class="sub">키보드만으로 조종하는 480×270 픽셀 아트 플라이트 액션. 루프를 돌고, 시점을 바꾸고, 미사일을 쏘세요. 설치할 것도, 내려받을 에셋도 없습니다.</p>
+      <div class="actions">
+        <a class="btn" href="#demo">게임 바로 플레이 <span aria-hidden="true">↓</span></a>
+        <a class="btn ghost" href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">소스 코드 ↗</a>
+      </div>
+      <ul class="facts">
+        <li>키보드 플레이</li>
+        <li>설치 없음</li>
+        <li>외부 에셋 0개</li>
+        <li>최고 기록 저장</li>
+      </ul>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap demo-block" id="demo">
+    <div class="demo-head">
+      <div class="section-label"><span class="live-dot" aria-hidden="true"></span> Live demo</div>
+      <button class="fs-btn" id="fullscreen" type="button">전체 화면으로 플레이 ⛶</button>
+    </div>
+    <div class="console" id="console">
+      <div class="console-bar">
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>dusk_patrol — play in browser</span>
+        <span class="spacer"></span>
+        <span>WebGL2 · 480×270</span>
+      </div>
+      <div class="screen">
+        <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
+      </div>
+      <div class="demo-hint">
+        <span>화면을 클릭한 뒤 <kbd>Enter</kbd>로 시작</span>
+        <span><kbd>W</kbd><kbd>S</kbd> 기수 · <kbd>A</kbd><kbd>D</kbd> 선회 · <kbd>F</kbd> 미사일</span>
+        <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 시점 변경</span>
+      </div>
+    </div>
+  </div>
+
+  <section class="body">
+    <div class="wrap">
+      <div class="intro">
+        <div class="section-label">The mission</div>
+        <h2>짧고 선명한 비행 한 판</h2>
+        <p>해안선을 따라 늘어선 도시와 바다 위를 날아갑니다. 주어진 시간은 120초. 드론을 격추할 때마다 점수가 오르고, 최고 기록은 브라우저에 남습니다. 복잡한 메뉴 없이 바로 시작해 바로 끝납니다.</p>
+      </div>
+      <div class="cards">
+        <article class="card">
+          <div class="tag">Flight</div>
+          <h3>360도 루프와 배럴롤</h3>
+          <p>기수를 계속 당기면 그대로 뒤집히며 회전합니다. 롤도 360도까지 감기고, 손을 놓으면 가장 짧은 경로로 수평을 찾습니다.</p>
+        </article>
+        <article class="card">
+          <div class="tag">Camera</div>
+          <h3>추적 · 조종석 · 시네마</h3>
+          <p><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>으로 시점을 바로 고르거나 <kbd>C</kbd>로 순환하세요. 조종석 시점에는 캐노피와 인공 수평선이 함께 표시됩니다.</p>
+        </article>
+        <article class="card">
+          <div class="tag">World</div>
+          <h3>코드로 지은 노을 도시</h3>
+          <p>935동의 빌딩, 해안선과 파도, 구름, 전투기와 폭발까지 모두 절차적으로 생성됩니다. 이미지 파일 하나 없습니다.</p>
+        </article>
+        <article class="card">
+          <div class="tag">Score</div>
+          <h3>120초 스코어 어택</h3>
+          <p>드론 8대를 상대로 미사일 8발로 시작합니다. 화면 밖 표적은 가장자리 화살표로 알려주고, 탄약은 자동으로 보급됩니다.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="body">
+    <div class="wrap">
+      <div class="intro">
+        <div class="section-label">Controls</div>
+        <h2>키보드만 잡으면 됩니다</h2>
+        <p>마우스는 선택 사항입니다. 화면을 클릭하면 포인터 락으로 마우스 조종도 가능하지만, 키보드만으로 모든 플레이가 끝납니다.</p>
+      </div>
+      <div class="keys">
+        <div class="keyrow"><span class="keyset"><kbd>W</kbd><kbd>S</kbd></span><span>기수 올림 / 내림 · 루프</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>A</kbd><kbd>D</kbd></span><span>좌우 선회 · 롤</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>Shift</kbd></span><span>애프터버너</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>F</kbd></span><span>미사일 발사</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><span>추적 / 조종석 / 시네마</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>B</kbd></span><span>배럴 롤</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>P</kbd></span><span>일시정지 / 재개</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>M</kbd></span><span>음소거</span></div>
+        <div class="keyrow"><span class="keyset"><kbd>Enter</kbd></span><span>시작 / 다시 비행</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="body">
+    <div class="wrap">
+      <div class="intro">
+        <div class="section-label">Under the hood</div>
+        <h2>하나의 HTML 파일 안에서</h2>
+        <p>장면은 480×270 프레임버퍼에 그린 뒤 화면에 맞춰 정수 배율로 키웁니다. 4이웃 언샤프, Bayer 디더, 채널 양자화로 도트 질감을 살리고, 소리까지 Web Audio로 합성합니다.</p>
+      </div>
+      <ul class="tech">
+        <li>WebGL2</li>
+        <li>480×270 framebuffer</li>
+        <li>Ordered dithering</li>
+        <li>Frustum culling</li>
+        <li>Web Audio synthesis</li>
+        <li>Single HTML file</li>
+        <li>No dependencies</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;width:100%">
+    <span>DUSK PATROL · a pixel patrol over the coast</span>
+    <span><a href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">GitHub</a> · <a href="#demo">데모로 돌아가기 ↑</a></span>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('fullscreen').addEventListener('click', function () {
+    const box = document.getElementById('console');
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (box.requestFullscreen) box.requestFullscreen();
+    document.getElementById('game').focus();
+  });
+</script>
+</body>
+</html>

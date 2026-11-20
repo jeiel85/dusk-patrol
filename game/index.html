@@ -1,0 +1,2302 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DUSK PATROL</title>
+<style>
+  html,body{margin:0;height:100%;background:#07060c;overflow:hidden}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#07060c}
+  #frame{position:relative;line-height:0;box-shadow:0 0 90px rgba(255,150,90,.10)}
+  #frame canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+  #gl{cursor:crosshair}
+  #hud{pointer-events:none}
+  #error{position:fixed;left:10px;bottom:10px;z-index:9;color:#ffb0b0;font:12px/1.4 monospace;white-space:pre-wrap;max-width:80vw}
+</style>
+</head>
+<body>
+<div id="stage"><div id="frame">
+  <canvas id="gl" width="480" height="270"></canvas>
+  <canvas id="hud" width="480" height="270"></canvas>
+</div></div>
+<div id="error"></div>
+<script>
+'use strict';
+/* ============================================================
+   DUSK PATROL — pixel-art jet over a coastal city at dusk.
+   WebGL2, low-res render + ordered dither, no external assets.
+   ============================================================ */
+
+const W = 480, H = 270, WORLD = 6000, HALF = WORLD / 2;
+const TAU = Math.PI * 2, DEG = Math.PI / 180;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const wrapAngle = a => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const mix = lerp;
+
+/* ---------- seeded rng ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(73129);
+
+/* ---------- value noise ---------- */
+function hash2(ix, iy) {
+  let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+function vnoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+  const ab = a + (b - a) * ux, cd = c + (d - c) * ux;
+  return ab + (cd - ab) * uy;
+}
+function fbm(x, y, oct) {
+  let a = 0, amp = 0.5, f = 1;
+  for (let i = 0; i < (oct || 4); i++) { a += vnoise(x * f, y * f) * amp; f *= 2.02; amp *= 0.5; }
+  return a;
+}
+function ridged(x, y) {
+  let a = 0, amp = 0.55, f = 1;
+  for (let i = 0; i < 4; i++) {
+    const n = 1 - Math.abs(vnoise(x * f, y * f) * 2 - 1);
+    a += n * n * amp; f *= 2.03; amp *= 0.5;
+  }
+  return clamp(a, 0, 1);
+}
+
+/* ---------- vec3 ---------- */
+const v3 = (x, y, z) => [x, y, z];
+const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const vsub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const vmul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const vdot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const vcross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const vlen = a => Math.hypot(a[0], a[1], a[2]);
+function vnorm(a) { const l = vlen(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+function vlerp(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+function vdist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
+
+/* ---------- mat4 (column major) ---------- */
+const m4 = () => new Float32Array(16);
+function m4id(o) { o.fill(0); o[0] = o[5] = o[10] = o[15] = 1; return o; }
+function m4mul(o, a, b) {
+  for (let c = 0; c < 4; c++) {
+    const b0 = b[c * 4], b1 = b[c * 4 + 1], b2 = b[c * 4 + 2], b3 = b[c * 4 + 3];
+    o[c * 4] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+    o[c * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+    o[c * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+    o[c * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+  }
+  return o;
+}
+function m4persp(o, fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  o.fill(0); o[0] = f / aspect; o[5] = f; o[10] = (far + near) * nf; o[11] = -1; o[14] = 2 * far * near * nf;
+  return o;
+}
+function m4look(o, eye, center, up) {
+  const z = vnorm(vsub(eye, center));
+  let x = vcross(up, z); if (vlen(x) < 1e-6) x = [1, 0, 0]; x = vnorm(x);
+  const y = vcross(z, x);
+  o[0] = x[0]; o[1] = y[0]; o[2] = z[0]; o[3] = 0;
+  o[4] = x[1]; o[5] = y[1]; o[6] = z[1]; o[7] = 0;
+  o[8] = x[2]; o[9] = y[2]; o[10] = z[2]; o[11] = 0;
+  o[12] = -vdot(x, eye); o[13] = -vdot(y, eye); o[14] = -vdot(z, eye); o[15] = 1;
+  return o;
+}
+function m4trans(o, x, y, z) { m4id(o); o[12] = x; o[13] = y; o[14] = z; return o; }
+function m4scale(o, x, y, z) { m4id(o); o[0] = x; o[5] = y; o[10] = z; return o; }
+function m4rotY(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[0] = c; o[2] = -s; o[8] = s; o[10] = c; return o; }
+function m4rotX(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[5] = c; o[6] = s; o[9] = -s; o[10] = c; return o; }
+function m4rotZ(o, a) { const c = Math.cos(a), s = Math.sin(a); m4id(o); o[0] = c; o[1] = s; o[4] = -s; o[5] = c; return o; }
+const _mA = m4(), _mB = m4(), _mC = m4(), _mD = m4();
+function planeMatrix(o, p, yaw, pitch, roll) {
+  m4rotY(_mA, yaw); m4rotX(_mB, pitch); m4rotZ(_mC, roll);
+  m4mul(_mD, _mA, _mB); m4mul(_mA, _mD, _mC);
+  m4id(o); o.set(_mA);
+  o[12] = p[0]; o[13] = p[1]; o[14] = p[2];
+  return o;
+}
+function projPoint(vp, p) {
+  const x = p[0], y = p[1], z = p[2];
+  const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+  const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+  const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+  if (cw <= 0.001) return null;
+  return [(cx / cw * 0.5 + 0.5) * W, (1 - (cy / cw * 0.5 + 0.5)) * H, cw];
+}
+
+/* ---------- frustum culling ---------- */
+const frustumPlanes = new Float32Array(24);
+function setFrustumPlane(i, a, b, c, d) {
+  const l = Math.hypot(a, b, c) || 1, o = i * 4;
+  frustumPlanes[o] = a / l; frustumPlanes[o + 1] = b / l;
+  frustumPlanes[o + 2] = c / l; frustumPlanes[o + 3] = d / l;
+}
+function updateFrustum(m) {
+  setFrustumPlane(0, m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]);
+  setFrustumPlane(1, m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]);
+  setFrustumPlane(2, m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]);
+  setFrustumPlane(3, m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]);
+  setFrustumPlane(4, m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]);
+  setFrustumPlane(5, m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]);
+}
+function boxInFrustum(min, max) {
+  for (let i = 0; i < 6; i++) {
+    const o = i * 4, a = frustumPlanes[o], b = frustumPlanes[o + 1], c = frustumPlanes[o + 2], d = frustumPlanes[o + 3];
+    const x = a >= 0 ? max[0] : min[0], y = b >= 0 ? max[1] : min[1], z = c >= 0 ? max[2] : min[2];
+    if (a * x + b * y + c * z + d < 0) return false;
+  }
+  return true;
+}
+
+/* ---------- color ---------- */
+function rgb(hex) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+/* ============================================================
+   WORLD: coast, terrain, city, clouds, targets
+   ============================================================ */
+function coastX(z) {
+  return 20
+    + (vnoise(z * 0.00075 + 3.7, 11.2) - 0.5) * 540
+    + (vnoise(z * 0.0021 - 5.1, 2.3) - 0.5) * 120
+    + Math.sin(z * 0.0009 + 1.2) * 70;
+}
+function cityMask(x, z) {
+  const d = x - coastX(z);
+  const mx = smoothstep(70, 150, d) * (1 - smoothstep(650, 790, d));
+  const mz = 1 - smoothstep(700, 870, Math.abs(z - 40));
+  return Math.min(mx, mz);
+}
+function terrainHeight(x, z) {
+  const shore = coastX(z);
+  const d = x - shore;
+  if (d < -140) return -9 - Math.min(42, (-d - 140) * 0.018);
+  let h;
+  if (d < 0) {
+    h = -9 * (1 - (d + 140) / 140);
+  } else {
+    h = smoothstep(0, 170, d) * 17;
+    const inland = smoothstep(220, 1900, d);
+    h += (fbm(x * 0.00125 + 9.1, z * 0.00125 - 3.4, 4) - 0.5) * 30 * inland;
+    h += Math.max(0, fbm(x * 0.00072 + 2.2, z * 0.00072 + 8.5, 4) - 0.44) * 170 * inland;
+  }
+  const north = smoothstep(-1000, -2700, z);
+  const east = smoothstep(1100, 2700, d);
+  const mm = Math.max(north * 0.95, east * 0.8) * smoothstep(60, 520, d);
+  if (mm > 0.001) h += mm * (70 + ridged(x * 0.00068 + 4.4, z * 0.00068 - 2.1) * 430);
+  const city = cityMask(x, z);
+  return h * (1 - city) + 11 * city;
+}
+
+const PAL = {
+  wet: rgb('#ab8660'), sand: rgb('#d8b184'), grass: rgb('#6d7847'), grass2: rgb('#92713e'),
+  rock: rgb('#5b4c60'), rock2: rgb('#3d3349'), snow: rgb('#d5c9de'), asphalt: rgb('#363542'),
+  seaDeep: rgb('#0a4a60'), seaShallow: rgb('#4fc6ba'), seaWarm: rgb('#e7a184'),
+  fog: rgb('#d19173'), sun: [1.0, 0.78, 0.5], skyAmb: [0.42, 0.4, 0.62]
+};
+const CITY_WALLS = [rgb('#394059'), rgb('#454b68'), rgb('#2d3349'), rgb('#4b4664'), rgb('#3f3a52')];
+
+function terrainColor(x, z, h, slope) {
+  const n = fbm(x * 0.012, z * 0.012, 2);
+  let c;
+  if (h < 1.2) c = PAL.wet;
+  else if (h < 6.5) c = PAL.sand;
+  else if (h < 70 + n * 28) c = n > 0.56 ? PAL.grass2 : PAL.grass;
+  else if (h < 190 + n * 40) c = PAL.rock;
+  else if (h < 330) c = PAL.rock2;
+  else c = PAL.snow;
+  if (slope > 0.62 && h > 8) c = PAL.rock;
+  if (h > 270 && slope < 0.38) c = PAL.snow;
+  if (cityMask(x, z) > 0.5 && h < 16) c = PAL.asphalt;
+  const v = 0.9 + n * 0.18;
+  return [c[0] * v, c[1] * v, c[2] * v];
+}
+
+/* city buildings */
+const buildings = [];
+(function generateCity() {
+  const r = mulberry32(44117);
+  for (let z = -760; z <= 830; z += 30) {
+    const shore = coastX(z);
+    for (let d = 120; d <= 690; d += 28) {
+      if (r() < 0.17) continue;
+      const w = 12 + r() * 14;
+      const dp = 10 + r() * 12;
+      let hgt = 9 + Math.pow(r(), 2.1) * 52;
+      if (r() < 0.055) hgt += 60 + r() * 80;
+      buildings.push({
+        x: shore + d + (r() - 0.5) * 9,
+        z: z + (r() - 0.5) * 6,
+        w, d: dp, h: hgt, seed: r() * 1000,
+        wall: CITY_WALLS[(r() * CITY_WALLS.length) | 0]
+      });
+    }
+  }
+})();
+
+/* street lights along the roads */
+const streetLights = [];
+(function generateLights() {
+  const r = mulberry32(991);
+  for (let z = -740; z <= 820; z += 34) {
+    const shore = coastX(z);
+    for (let d = 130; d <= 690; d += 46) {
+      if (r() < 0.28) continue;
+      streetLights.push([shore + d + 13 + r() * 4, 15.5, z + 13 + r() * 4]);
+    }
+  }
+})();
+
+/* clouds */
+const cloudDefs = [];
+(function generateClouds() {
+  const r = mulberry32(31007);
+  for (let i = 0; i < 56; i++) {
+    cloudDefs.push({
+      x: (r() * 2 - 1) * 2800, y: 280 + r() * 430, z: (r() * 2 - 1) * 2800,
+      sx: 130 + r() * 270, sy: 55 + r() * 105, tex: (r() * 4) | 0, drift: r() * TAU
+    });
+  }
+  for (let i = 0; i < 16; i++) {
+    const z = (r() * 2 - 1) * 2200;
+    cloudDefs.push({
+      x: coastX(z) - 900 + r() * 1800, y: 95 + r() * 90, z,
+      sx: 90 + r() * 160, sy: 35 + r() * 50, tex: (r() * 4) | 0, drift: r() * TAU
+    });
+  }
+})();
+
+function droneHome(i) {
+  const r = mulberry32(9001 + i * 733);
+  const z = -380 + r() * 1420;
+  const x = coastX(z) - 140 - r() * 700;
+  return [x, 110 + r() * 150, z];
+}
+
+function buildHeightData(size) {
+  const data = new Uint8Array(size * size);
+  for (let j = 0; j < size; j++) {
+    const z = -HALF + (j + 0.5) / size * WORLD;
+    for (let i = 0; i < size; i++) {
+      const x = -HALF + (i + 0.5) / size * WORLD;
+      data[j * size + i] = clamp(terrainHeight(x, z) / 600, 0, 1) * 255;
+    }
+  }
+  return data;
+}
+/* ============================================================
+   WEBGL SETUP
+   ============================================================ */
+const glCanvas = document.getElementById('gl');
+const hudCanvas = document.getElementById('hud');
+const gl = glCanvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, powerPreference: 'high-performance' });
+const hud = hudCanvas.getContext('2d');
+const errBox = document.getElementById('error');
+function showError(msg) {
+  console.error(msg);
+  errBox.textContent += msg + ' | ';
+}
+if (!gl) showError('WebGL2 is not available in this browser.');
+hud.imageSmoothingEnabled = false;
+
+const uniCache = new Map();
+function U(p, n) {
+  let m = uniCache.get(p);
+  if (!m) { m = {}; uniCache.set(p, m); }
+  if (!(n in m)) m[n] = gl.getUniformLocation(p, n);
+  return m[n];
+}
+function compile(type, src, name) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    showError('SHADER ' + name + ': ' + gl.getShaderInfoLog(s));
+    return null;
+  }
+  return s;
+}
+function makeProg(vsSrc, fsSrc, name) {
+  const v = compile(gl.VERTEX_SHADER, vsSrc, name + '.vs');
+  const f = compile(gl.FRAGMENT_SHADER, fsSrc, name + '.fs');
+  if (!v || !f) return null;
+  const p = gl.createProgram();
+  gl.attachShader(p, v); gl.attachShader(p, f); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    showError('LINK ' + name + ': ' + gl.getProgramInfoLog(p));
+    return null;
+  }
+  return p;
+}
+function buf(data, usage) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, data, usage || gl.STATIC_DRAW);
+  return b;
+}
+const FS_TRI = new Float32Array([-1, -1, 3, -1, -1, 3]);
+
+const sceneTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const depthRb = gl.createRenderbuffer();
+gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, W, H);
+const sceneFbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) showError('Scene framebuffer incomplete');
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+const heightTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, heightTex);
+gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 512, 512, 0, gl.RED, gl.UNSIGNED_BYTE, buildHeightData(512));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+/* ============================================================
+   SHADERS — sky, water
+   ============================================================ */
+const SKY_VS = `#version 300 es
+layout(location=0) in vec2 aPos;
+out vec2 vUV;
+void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const SKY_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 outColor;
+uniform vec3 uRight, uUp, uFwd, uSun;
+uniform float uTanFov, uAspect, uTime;
+
+float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
+float noise(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=h21(i), b=h21(i+vec2(1,0)), c=h21(i+vec2(0,1)), d=h21(i+vec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
+float fbm(vec2 p){ float a=0.0,w=0.5; for(int i=0;i<5;i++){ a+=noise(p)*w; p*=2.03; w*=0.5; } return a; }
+
+void main(){
+  vec2 p = vUV*2.0-1.0;
+  vec3 dir = normalize(uFwd + uRight*p.x*uTanFov*uAspect + uUp*p.y*uTanFov);
+  float y = dir.y;
+  float t = clamp(y, 0.0, 1.0);
+  vec3 zenith = vec3(0.135,0.10,0.27);
+  vec3 mid    = vec3(0.46,0.26,0.44);
+  vec3 horizon= vec3(0.97,0.62,0.42);
+  vec3 col = mix(horizon, mid, smoothstep(0.0,0.30,t));
+  col = mix(col, zenith, smoothstep(0.24,0.90,t));
+  col = mix(col, vec3(0.83,0.50,0.42), exp(-max(y,0.0)*16.0)*0.55);
+
+  float sd = max(dot(dir,uSun),0.0);
+  vec3 sunCol = vec3(1.0,0.80,0.52);
+  col += sunCol * pow(sd, 42.0) * 0.22;
+  col += sunCol * pow(sd, 220.0) * 0.85;
+  float disc = smoothstep(0.99945, 0.99978, sd);
+  col = mix(col, vec3(1.0,0.95,0.80), disc);
+
+  vec3 sr = normalize(cross(vec3(0.0,1.0,0.0), uSun));
+  vec3 su = cross(uSun, sr);
+  float ang = atan(dot(dir,su), dot(dir,sr));
+  float ray = 0.5+0.5*sin(ang*27.0 + fbm(vec2(ang*2.2, 2.7))*5.0);
+  ray = pow(ray,4.0) * pow(sd,3.0) * smoothstep(0.0,0.16,y);
+  col += vec3(1.0,0.50,0.28) * ray * 0.20;
+
+  vec2 cuv = dir.xz / max(dir.y+0.09, 0.02);
+  float cl = fbm(cuv*vec2(0.55,2.2) + vec2(uTime*0.004,0.0));
+  float band = smoothstep(0.55,0.74,cl) * smoothstep(0.015,0.16,y) * (1.0-smoothstep(0.48,0.82,y));
+  vec3 cloudCol = mix(vec3(0.98,0.58,0.55), vec3(1.0,0.84,0.66), pow(sd,2.0));
+  col = mix(col, cloudCol, band*0.5);
+
+  col = mix(vec3(0.08,0.09,0.15), col, smoothstep(-0.16, 0.0, y));
+  outColor = vec4(col, 1.0);
+}`;
+
+const WATER_VS = `#version 300 es
+layout(location=0) in vec2 aPos;
+uniform mat4 uVP;
+out vec3 vW;
+void main(){ vW = vec3(aPos.x, 0.0, aPos.y); gl_Position = uVP*vec4(vW,1.0); }`;
+
+const WATER_FS = `#version 300 es
+precision highp float;
+in vec3 vW;
+out vec4 outColor;
+uniform sampler2D uHeight;
+uniform vec3 uCam, uSun, uFogColor;
+uniform float uTime;
+
+float h21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+float noise(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=h21(i), b=h21(i+vec2(1,0)), c=h21(i+vec2(0,1)), d=h21(i+vec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
+void main(){
+  vec2 uv = vW.xz/6000.0+0.5;
+  float inside = step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0);
+  float h = texture(uHeight, clamp(uv,0.001,0.999)).r*600.0*inside;
+  float depth = max(h, 0.0);
+
+  vec3 deep = vec3(0.010,0.105,0.20);
+  vec3 shallow = vec3(0.14,0.50,0.52);
+  vec3 col = mix(shallow, deep, smoothstep(3.0,80.0,depth));
+  col = mix(col, vec3(0.07,0.30,0.39), smoothstep(70.0,240.0,depth)*0.35);
+
+  vec2 q = vW.xz*0.055;
+  float t = uTime;
+  float e = sin(q.x*1.6 + t*1.2)*0.045 + sin(q.y*2.1 - t*0.9)*0.035 + sin((q.x+q.y)*0.8 + t*0.6)*0.05;
+  vec3 n = normalize(vec3(e, 1.0, e*0.65));
+  vec3 V = normalize(uCam - vW);
+  vec3 H = normalize(uSun + V);
+
+  float fres = pow(1.0-max(dot(n,V),0.0), 3.0);
+  col = mix(col, vec3(0.78,0.50,0.44), fres*0.32);
+
+  float spec = pow(max(dot(n,H),0.0), 110.0);
+  col += vec3(1.0,0.74,0.46) * spec * 1.35;
+
+  vec2 cell = floor(vW.xz*0.75);
+  float rnd = h21(cell + floor(t*7.0)*vec2(13.0,7.0));
+  float spark = step(0.989, rnd) * (0.25 + 0.75*pow(max(dot(n,H),0.0),4.0));
+  col += vec3(1.0,0.92,0.78) * spark * 1.9;
+
+  float foamBand = 1.0 - smoothstep(0.4, 7.0, depth);
+  float fnoise = smoothstep(0.42,0.68, noise(vW.xz*0.10 + vec2(t*0.22,-t*0.16)));
+  col = mix(col, vec3(0.86,0.92,0.86), foamBand*(0.22+fnoise*0.55));
+
+  float fog = 1.0-exp(-length(vW-uCam)*0.00027);
+  col = mix(col, uFogColor, fog);
+  outColor = vec4(col,1.0);
+}`;
+/* ============================================================
+   SHADERS — solid, city, clouds, points, particles, post
+   ============================================================ */
+const SOLID_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec3 aColor;
+uniform mat4 uVP, uModel;
+out vec3 vW, vN, vC;
+void main(){
+  vec4 w = uModel*vec4(aPos,1.0);
+  vW = w.xyz; vN = mat3(uModel)*aNormal; vC = aColor;
+  gl_Position = uVP*w;
+}`;
+
+const SOLID_FS = `#version 300 es
+precision highp float;
+in vec3 vW, vN, vC;
+out vec4 outColor;
+uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
+uniform float uFogDensity, uSpec;
+void main(){
+  vec3 N = normalize(vN), V = normalize(uCam-vW);
+  float ndl = max(dot(N,uSun),0.0);
+  float wrap = max((dot(N,uSun)+0.25)/1.25, 0.0);
+  vec3 col = vC*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
+  vec3 H = normalize(uSun+V);
+  col += uSunColor * pow(max(dot(N,H),0.0), 36.0) * uSpec;
+  float rim = pow(1.0-max(dot(N,V),0.0), 3.0);
+  col += uSunColor * rim * 0.05;
+  float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
+  col = mix(col, uFogColor, fog);
+  outColor = vec4(col,1.0);
+}`;
+
+const CITY_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec3 aOffset;
+layout(location=3) in vec3 aSize;
+layout(location=4) in float aSeed;
+layout(location=5) in vec3 aColor;
+uniform mat4 uVP;
+out vec3 vW, vN, vC, vLocal, vSize;
+out float vSeed;
+void main(){
+  vec3 w = aOffset + aPos*aSize;
+  vW = w; vN = aNormal; vC = aColor;
+  vLocal = aPos; vSize = aSize; vSeed = aSeed;
+  gl_Position = uVP*vec4(w,1.0);
+}`;
+
+const CITY_FS = `#version 300 es
+precision highp float;
+in vec3 vW, vN, vC, vLocal, vSize;
+in float vSeed;
+out vec4 outColor;
+uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
+uniform float uFogDensity, uTime;
+
+float h21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
+
+void main(){
+  vec3 n = normalize(vN);
+  float ndl = max(dot(n,uSun),0.0);
+  vec3 col = vC*(uAmbient*1.05 + uSunColor*ndl*0.95);
+
+  if (abs(n.y) < 0.5) {
+    float u = (abs(n.x) > 0.5 ? vLocal.z*vSize.z : vLocal.x*vSize.x);
+    float v = vLocal.y*vSize.y;
+    vec2 g = vec2(u/3.8, (v-1.5)/4.2);
+    vec2 cell = floor(g);
+    vec2 f = fract(g);
+    float win = step(0.16,f.x)*step(f.x,0.80)*step(0.22,f.y)*step(f.y,0.80);
+    float rnd = h21(cell + vec2(vSeed*7.13, vSeed*3.77));
+    float on = step(0.40, rnd);
+    vec3 wc = mix(vec3(1.0,0.58,0.24), vec3(1.0,0.86,0.52), h21(cell+vec2(3.1,9.2)));
+    if (rnd < 0.055) wc = vec3(0.55,0.82,1.0);
+    col = mix(col, vec3(0.05,0.06,0.11), win*0.6);
+    col += wc * win * on * 1.45;
+    if (vLocal.y > 0.985) col = vC*0.5 + vec3(0.03,0.02,0.05);
+    if (vLocal.y < 0.02) col *= 0.55;
+  } else if (n.y > 0.5) {
+    col = vC*0.40 + vec3(0.02,0.015,0.04);
+  }
+  float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
+  col = mix(col, uFogColor, fog);
+  outColor = vec4(col,1.0);
+}`;
+
+const CLOUD_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUV;
+uniform mat4 uVP, uModel;
+out vec2 vUV; out vec3 vW;
+void main(){
+  vec4 w = uModel*vec4(aPos,1.0);
+  vW = w.xyz; vUV = aUV;
+  gl_Position = uVP*w;
+}`;
+
+const CLOUD_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in vec3 vW;
+out vec4 outColor;
+uniform sampler2D uTex;
+uniform vec3 uTint, uShade, uFogColor, uCam;
+uniform float uFogDensity;
+void main(){
+  vec4 t = texture(uTex, vUV);
+  if (t.a < 0.5) discard;
+  vec3 col = mix(uShade, uTint, clamp(vUV.y*1.1-0.05, 0.0, 1.0));
+  float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
+  col = mix(col, uFogColor, fog);
+  outColor = vec4(col,1.0);
+}`;
+
+const POINT_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aColor;
+layout(location=2) in float aSize;
+layout(location=3) in float aPhase;
+uniform mat4 uVP;
+uniform vec3 uCam;
+uniform float uTime;
+out vec3 vCol; out float vFade; out float vBlink;
+void main(){
+  gl_Position = uVP*vec4(aPos,1.0);
+  float d = length(aPos-uCam);
+  gl_PointSize = clamp(abs(aSize)*700.0/max(d,50.0), 1.0, 7.0);
+  vCol = aColor;
+  vFade = 1.0 - smoothstep(700.0, 2800.0, d);
+  vBlink = aSize < 0.0 ? step(0.0, sin(uTime*5.0 + aPhase*6.283))
+                       : 0.86 + 0.14*sin(uTime*2.2 + aPhase*19.0);
+}`;
+
+const POINT_FS = `#version 300 es
+precision highp float;
+in vec3 vCol; in float vFade; in float vBlink;
+out vec4 outColor;
+void main(){
+  vec2 q = gl_PointCoord*2.0-1.0;
+  float r = dot(q,q);
+  if (r > 1.0) discard;
+  float a = (1.0-r); a *= a;
+  outColor = vec4(vCol, a*vFade*vBlink);
+}`;
+
+const PART_VS = `#version 300 es
+layout(location=0) in vec3 aCenter;
+layout(location=1) in vec2 aCorner;
+layout(location=2) in vec4 aColor;
+layout(location=3) in float aSize;
+uniform mat4 uVP;
+uniform vec3 uRight, uUp;
+out vec2 vUV; out vec4 vCol;
+void main(){
+  vec3 p = aCenter + uRight*aCorner.x*aSize + uUp*aCorner.y*aSize;
+  vUV = aCorner*0.5+0.5;
+  vCol = aColor;
+  gl_Position = uVP*vec4(p,1.0);
+}`;
+
+const PART_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in vec4 vCol;
+out vec4 outColor;
+uniform sampler2D uTex;
+void main(){
+  vec4 t = texture(uTex, vUV);
+  if (t.a < 0.02) discard;
+  outColor = vec4(vCol.rgb, vCol.a*t.a);
+}`;
+
+const BURN_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in float aT;
+uniform mat4 uVP, uModel;
+uniform float uLen, uZ0;
+out float vT;
+void main(){
+  vec3 p = vec3(aPos.x, aPos.y, uZ0 + aPos.z*uLen);
+  vT = aT;
+  gl_Position = uVP*uModel*vec4(p,1.0);
+}`;
+
+const BURN_FS = `#version 300 es
+precision highp float;
+in float vT;
+out vec4 outColor;
+uniform float uIntensity, uTime;
+void main(){
+  float flick = 0.72 + 0.28*sin(vT*38.0 - uTime*44.0);
+  float a = pow(1.0-vT, 1.5)*flick*uIntensity;
+  vec3 col = mix(vec3(1.0,0.96,0.82), vec3(1.0,0.30,0.04), pow(vT,0.7));
+  outColor = vec4(col, a);
+}`;
+
+const POST_VS = `#version 300 es
+layout(location=0) in vec2 aPos;
+out vec2 vUV;
+void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }`;
+
+const POST_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 outColor;
+uniform sampler2D uScene;
+float bayer2(vec2 a){ a=floor(a); return fract(a.x*0.5 + a.y*a.y*0.75); }
+float bayer4(vec2 a){ return bayer2(0.5*a)*0.25 + bayer2(a); }
+float bayer8(vec2 a){ return bayer4(0.5*a)*0.25 + bayer2(a); }
+void main(){
+  vec3 c = texture(uScene, vUV).rgb;
+  // Light unsharp mask keeps silhouettes and window lights crisp at 480x270.
+  vec2 px = 1.0 / vec2(textureSize(uScene, 0));
+  vec3 bl = 0.25*(texture(uScene, vUV+vec2(px.x,0.0)).rgb
+                + texture(uScene, vUV-vec2(px.x,0.0)).rgb
+                + texture(uScene, vUV+vec2(0.0,px.y)).rgb
+                + texture(uScene, vUV-vec2(0.0,px.y)).rgb);
+  c += (c - bl)*0.22;
+  float l = dot(c, vec3(0.299,0.587,0.114));
+  c = mix(vec3(l), c, 1.16);
+  c = pow(max(c,0.0), vec3(0.94,1.0,1.04));
+  c += (1.0-l)*vec3(0.022,0.0,0.055);
+  c *= vec3(1.05,1.0,0.97);
+  vec2 d = vUV-0.5;
+  c *= 1.0 - 0.30*pow(length(d)*1.45, 2.2);
+  float bay = (bayer8(gl_FragCoord.xy) - 0.5) * 0.55;
+  c = floor(c*10.0 + 0.5 + bay)/10.0;
+  outColor = vec4(clamp(c,0.0,1.0), 1.0);
+}`;
+
+const skyProg = makeProg(SKY_VS, SKY_FS, 'sky');
+const waterProg = makeProg(WATER_VS, WATER_FS, 'water');
+const solidProg = makeProg(SOLID_VS, SOLID_FS, 'solid');
+const cityProg = makeProg(CITY_VS, CITY_FS, 'city');
+const cloudProg = makeProg(CLOUD_VS, CLOUD_FS, 'cloud');
+const pointProg = makeProg(POINT_VS, POINT_FS, 'point');
+const partProg = makeProg(PART_VS, PART_FS, 'part');
+const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
+const postProg = makeProg(POST_VS, POST_FS, 'post');
+const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
+const FOG_COL = [0.80, 0.52, 0.44];
+const FOG_DENS = 0.00026;
+
+/* ============================================================
+   GEOMETRY / ASSETS
+   ============================================================ */
+/* fullscreen triangle (sky + post) */
+const fsVao = gl.createVertexArray();
+gl.bindVertexArray(fsVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(FS_TRI));
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+/* water quad */
+const waterVao = gl.createVertexArray();
+gl.bindVertexArray(waterVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
+  -7000, -7000, 7000, -7000, 7000, 7000,
+  -7000, -7000, 7000, 7000, -7000, 7000
+])));
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.bindVertexArray(null);
+
+/* ---------- terrain ---------- */
+const TN = 160, TSTEP = WORLD / TN;
+const th = new Float32Array((TN + 1) * (TN + 1));
+for (let j = 0; j <= TN; j++) {
+  const z = -HALF + j * TSTEP;
+  for (let i = 0; i <= TN; i++) th[j * (TN + 1) + i] = terrainHeight(-HALF + i * TSTEP, z);
+}
+const triTotal = TN * TN * 2;
+const tPos = new Float32Array(triTotal * 9);
+const tNor = new Float32Array(triTotal * 9);
+const tCol = new Float32Array(triTotal * 9);
+let tOff = 0;
+const HGT = (i, j) => th[j * (TN + 1) + i];
+function emitTerrainTri(ax, az, bx, bz, cx, cz, ha, hb, hc) {
+  const ux = bx - ax, uy = hb - ha, uz = bz - az;
+  const vx = cx - ax, vy = hc - ha, vz = cz - az;
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+  if (ny < 0) {
+    let t = bx; bx = cx; cx = t; t = bz; bz = cz; cz = t; t = hb; hb = hc; hc = t;
+    nx = -nx; ny = -ny; nz = -nz;
+  }
+  const mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3, mh = (ha + hb + hc) / 3;
+  const c = terrainColor(mx, mz, mh, 1 - ny);
+  tPos[tOff] = ax; tPos[tOff + 1] = ha; tPos[tOff + 2] = az;
+  tPos[tOff + 3] = bx; tPos[tOff + 4] = hb; tPos[tOff + 5] = bz;
+  tPos[tOff + 6] = cx; tPos[tOff + 7] = hc; tPos[tOff + 8] = cz;
+  for (let k = 0; k < 3; k++) {
+    tNor[tOff + k * 3] = nx; tNor[tOff + k * 3 + 1] = ny; tNor[tOff + k * 3 + 2] = nz;
+    tCol[tOff + k * 3] = c[0]; tCol[tOff + k * 3 + 1] = c[1]; tCol[tOff + k * 3 + 2] = c[2];
+  }
+  tOff += 9;
+}
+// Split the terrain into 8x8 chunks so distant ground can be frustum-culled.
+const TCH = 8, TPC = TN / TCH;
+const terrainChunks = [];
+for (let cj = 0; cj < TCH; cj++) {
+  for (let ci = 0; ci < TCH; ci++) {
+    const floatStart = tOff;
+    let minY = 1e9, maxY = -1e9;
+    for (let j = cj * TPC; j < (cj + 1) * TPC; j++) {
+      const z0 = -HALF + j * TSTEP, z1 = z0 + TSTEP;
+      for (let i = ci * TPC; i < (ci + 1) * TPC; i++) {
+        const x0 = -HALF + i * TSTEP, x1 = x0 + TSTEP;
+        const ha = HGT(i, j), hb = HGT(i, j + 1), hc = HGT(i + 1, j), hd = HGT(i + 1, j + 1);
+        minY = Math.min(minY, ha, hb, hc, hd); maxY = Math.max(maxY, ha, hb, hc, hd);
+        emitTerrainTri(x0, z0, x0, z1, x1, z0, ha, hb, hc);
+        emitTerrainTri(x1, z0, x0, z1, x1, z1, hc, hb, hd);
+      }
+    }
+    terrainChunks.push({
+      vao: null, first: floatStart / 3, count: (tOff - floatStart) / 3,
+      min: [-HALF + ci * TPC * TSTEP, minY - 3, -HALF + cj * TPC * TSTEP],
+      max: [-HALF + (ci + 1) * TPC * TSTEP, maxY + 3, -HALF + (cj + 1) * TPC * TSTEP]
+    });
+  }
+}
+const tPosBuf = buf(tPos), tNorBuf = buf(tNor), tColBuf = buf(tCol);
+for (const ch of terrainChunks) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, tPosBuf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, ch.first * 12);
+  gl.bindBuffer(gl.ARRAY_BUFFER, tNorBuf);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, ch.first * 12);
+  gl.bindBuffer(gl.ARRAY_BUFFER, tColBuf);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, ch.first * 12);
+  ch.vao = vao;
+}
+gl.bindVertexArray(null);
+
+/* ---------- city cube + instances ---------- */
+function cubeFace(pos, nor, n, p0, p1, p2, p3) {
+  let a = p0, b = p1, c = p2, d = p3;
+  let ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  let vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  if (nx * n[0] + ny * n[1] + nz * n[2] < 0) { const t = b; b = c; c = t; }
+  for (const p of [a, b, c, a, c, d]) {
+    pos.push(p[0], p[1], p[2]); nor.push(n[0], n[1], n[2]);
+  }
+}
+const cubePos = [], cubeNor = [];
+cubeFace(cubePos, cubeNor, [1, 0, 0], [1, 0, 0], [1, 0, 1], [1, 1, 1], [1, 1, 0]);
+cubeFace(cubePos, cubeNor, [-1, 0, 0], [0, 0, 0], [0, 1, 0], [0, 1, 1], [0, 0, 1]);
+cubeFace(cubePos, cubeNor, [0, 0, 1], [0, 0, 1], [0, 1, 1], [1, 1, 1], [1, 0, 1]);
+cubeFace(cubePos, cubeNor, [0, 0, -1], [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]);
+cubeFace(cubePos, cubeNor, [0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 1, 1], [0, 1, 1]);
+cubeFace(cubePos, cubeNor, [0, -1, 0], [0, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 0]);
+
+const instData = new Float32Array(buildings.length * 10);
+for (let i = 0; i < buildings.length; i++) {
+  const b = buildings[i], o = i * 10;
+  instData[o] = b.x - b.w / 2; instData[o + 1] = 11; instData[o + 2] = b.z - b.d / 2;
+  instData[o + 3] = b.w; instData[o + 4] = b.h; instData[o + 5] = b.d;
+  instData[o + 6] = b.seed;
+  instData[o + 7] = b.wall[0]; instData[o + 8] = b.wall[1]; instData[o + 9] = b.wall[2];
+}
+const cityVao = gl.createVertexArray();
+gl.bindVertexArray(cityVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cubePos)));
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(cubeNor)));
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(instData));
+const IS = 40;
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, IS, 0); gl.vertexAttribDivisor(2, 1);
+gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, IS, 12); gl.vertexAttribDivisor(3, 1);
+gl.enableVertexAttribArray(4); gl.vertexAttribPointer(4, 1, gl.FLOAT, false, IS, 24); gl.vertexAttribDivisor(4, 1);
+gl.enableVertexAttribArray(5); gl.vertexAttribPointer(5, 3, gl.FLOAT, false, IS, 28); gl.vertexAttribDivisor(5, 1);
+gl.bindVertexArray(null);
+
+/* ---------- cloud textures ---------- */
+function makeCloudTexture(seed) {
+  const S = 64;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S), d = img.data;
+  const r = mulberry32(seed);
+  const blobs = [];
+  const nb = 5 + ((r() * 4) | 0);
+  for (let i = 0; i < nb; i++) blobs.push([0.18 + r() * 0.64, 0.30 + r() * 0.42, 0.12 + r() * 0.17]);
+  const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const nx = x / S, ny = y / S;
+    let f = 0;
+    for (const b of blobs) {
+      const dx = (nx - b[0]) * 1.45, dy = (ny - b[1]) * 2.5;
+      f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
+    }
+    f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
+    const b = (bayer[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
+    const a = f > 0.30 ? 1 : (f > 0.255 && b > 0 ? 1 : 0);
+    const i = (y * S + x) * 4;
+    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = a ? 255 : 0;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const cloudTexes = [makeCloudTexture(11), makeCloudTexture(29), makeCloudTexture(53), makeCloudTexture(97)];
+
+const cloudVao = gl.createVertexArray();
+gl.bindVertexArray(cloudVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
+  -1, -1, 0, 0, 0, 1, -1, 0, 1, 0, 1, 1, 0, 1, 1,
+  -1, -1, 0, 0, 0, 1, 1, 0, 1, 1, -1, 1, 0, 0, 1
+])));
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
+gl.bindVertexArray(null);
+
+/* ---------- mesh builder ---------- */
+function MeshBuilder() { this.p = []; this.n = []; this.c = []; }
+MeshBuilder.prototype.tri = function (a, b, c, col, hint) {
+  let ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  let vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  if (hint && nx * hint[0] + ny * hint[1] + nz * hint[2] < 0) {
+    const t = b; b = c; c = t; nx = -nx; ny = -ny; nz = -nz;
+  }
+  const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+  for (const p of [a, b, c]) {
+    this.p.push(p[0], p[1], p[2]);
+    this.n.push(nx, ny, nz);
+    this.c.push(col[0], col[1], col[2]);
+  }
+};
+MeshBuilder.prototype.quad = function (a, b, c, d, col, hint) {
+  this.tri(a, b, c, col, hint);
+  this.tri(a, c, d, col, hint);
+};
+MeshBuilder.prototype.build = function () {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.p)));
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.n)));
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(this.c)));
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return { vao, count: this.p.length / 3 };
+};
+
+/* ---------- jet ---------- */
+const JET_LIGHT = rgb('#c3cee2'), JET_MID = rgb('#8e9ab6'), JET_DARK = rgb('#5b647d');
+const JET_WING = rgb('#b0bcd4'), JET_WING_BOT = rgb('#606a82'), JET_EDGE = rgb('#dce4f0');
+const JET_FIN = rgb('#525b73'), JET_CANOPY = rgb('#263b5c'), JET_CANOPY_HI = rgb('#6d9cbb');
+const JET_ORANGE = rgb('#e57b45');
+
+const jet = new MeshBuilder();
+function ringPts(z, rx, ry, y0) {
+  const p = [];
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * TAU;
+    p.push([Math.cos(a) * rx, y0 + Math.sin(a) * ry, z]);
+  }
+  return p;
+}
+const FR = [
+  ringPts(-3.7, 0.52, 0.44, 0.08),
+  ringPts(0.1, 0.74, 0.62, 0.05),
+  ringPts(3.0, 0.82, 0.66, 0.02),
+  ringPts(4.9, 0.58, 0.44, 0.0)
+];
+for (let r = 0; r < FR.length - 1; r++) {
+  for (let i = 0; i < 6; i++) {
+    const a = FR[r][i], b = FR[r][(i + 1) % 6], c = FR[r + 1][(i + 1) % 6], d = FR[r + 1][i];
+    const cy = (a[1] + b[1] + c[1] + d[1]) / 4;
+    const col = cy > 0.42 ? JET_LIGHT : (cy > -0.12 ? JET_MID : JET_DARK);
+    jet.quad(a, b, c, d, col, [(a[0] + b[0] + c[0] + d[0]) / 4, cy - 0.06, 0]);
+  }
+}
+const tip = [0, 0.10, -7.4];
+for (let i = 0; i < 6; i++) {
+  const a = FR[0][i], b = FR[0][(i + 1) % 6];
+  jet.tri(tip, b, a, JET_MID, [a[0] + b[0], (a[1] + b[1]) / 2 - 0.06, 0]);
+}
+for (let i = 0; i < 6; i++) {
+  const a = FR[3][i], b = FR[3][(i + 1) % 6];
+  jet.tri([0, 0.0, 5.35], a, b, JET_DARK, [0, 0, -1]);
+}
+
+function buildWing(sign) {
+  const poly = [[0.5, -1.5], [0.5, 2.8], [2.3, 3.15], [4.95, 2.15], [4.95, 1.45], [1.8, -1.0]];
+  for (let i = 1; i < poly.length - 1; i++) {
+    jet.tri(
+      [sign * poly[0][0], 0.07, poly[0][1]],
+      [sign * poly[i][0], 0.07, poly[i][1]],
+      [sign * poly[i + 1][0], 0.07, poly[i + 1][1]],
+      JET_WING, [0, 1, 0]
+    );
+    jet.tri(
+      [sign * poly[0][0], -0.23, poly[0][1]],
+      [sign * poly[i + 1][0], -0.23, poly[i + 1][1]],
+      [sign * poly[i][0], -0.23, poly[i][1]],
+      JET_WING_BOT, [0, -1, 0]
+    );
+  }
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const cx = sign * (p[0] + q[0]) / 2;
+    jet.quad(
+      [sign * p[0], 0.07, p[1]], [sign * q[0], 0.07, q[1]],
+      [sign * q[0], -0.23, q[1]], [sign * p[0], -0.23, p[1]],
+      JET_EDGE, [cx, 0, (p[1] + q[1]) / 2 - 1.5]
+    );
+  }
+  jet.quad(
+    [sign * 4.35, 0.075, 1.55], [sign * 4.35, 0.075, 2.1],
+    [sign * 4.95, 0.075, 2.15], [sign * 4.95, 0.075, 1.5],
+    JET_ORANGE, [0, 1, 0]
+  );
+}
+buildWing(1); buildWing(-1);
+
+function buildFin(sign) {
+  const p0 = [0.48 * sign, 0.5, 2.5], p1 = [0.48 * sign, 0.5, 4.7];
+  const p2 = [0.98 * sign, 1.75, 4.95], p3 = [0.98 * sign, 1.75, 3.95];
+  for (const off of [-0.04, 0.04]) {
+    jet.quad(
+      [p0[0] + off, p0[1], p0[2]], [p1[0] + off, p1[1], p1[2]],
+      [p2[0] + off, p2[1], p2[2]], [p3[0] + off, p3[1], p3[2]],
+      JET_FIN, [sign, 0.15, 0]
+    );
+  }
+  jet.quad(p0, p1, [p2[0] - sign * 0.04, 1.75, 4.95], [p3[0] - sign * 0.04, 1.75, 3.95], JET_EDGE, [sign, 0.3, 0]);
+}
+buildFin(1); buildFin(-1);
+
+function buildStab(sign) {
+  const poly = [[0.45, 3.15], [0.45, 4.55], [1.3, 4.8], [2.7, 4.45], [2.7, 4.15], [1.2, 3.95]];
+  for (let i = 1; i < poly.length - 1; i++) {
+    jet.tri(
+      [sign * poly[0][0], -0.01, poly[0][1]], [sign * poly[i][0], -0.01, poly[i][1]],
+      [sign * poly[i + 1][0], -0.01, poly[i + 1][1]], JET_WING, [0, 1, 0]
+    );
+    jet.tri(
+      [sign * poly[0][0], -0.15, poly[0][1]], [sign * poly[i + 1][0], -0.15, poly[i + 1][1]],
+      [sign * poly[i][0], -0.15, poly[i][1]], JET_WING_BOT, [0, -1, 0]
+    );
+  }
+}
+buildStab(1); buildStab(-1);
+
+const c0 = [-0.4, 0.42, -3.55], c1 = [0.4, 0.42, -3.55], c2 = [0.48, 0.4, -1.45], c3 = [-0.48, 0.4, -1.45];
+const rd0 = [0, 0.96, -3.0], rd1 = [0, 0.99, -1.75];
+jet.tri(c0, c1, rd0, JET_CANOPY, [0, 0.4, -1]);
+jet.tri(c1, c2, rd1, JET_CANOPY, [1, 0.4, 0]);
+jet.tri(c1, rd1, rd0, JET_CANOPY_HI, [1, 0.8, 0]);
+jet.tri(c3, rd1, c2, JET_CANOPY, [-1, 0.4, 0]);
+jet.tri(c3, c0, rd0, JET_CANOPY, [-1, 0.4, 0]);
+jet.tri(c3, rd0, rd1, JET_CANOPY_HI, [-1, 0.8, 0]);
+jet.tri(c2, c3, rd1, JET_CANOPY, [0, 0.4, 1]);
+
+function buildNozzle(sign) {
+  const cx = sign * 0.44, z0 = 4.9, z1 = 5.5;
+  const a = [], b = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = i / 6 * TAU;
+    a.push([cx + Math.cos(ang) * 0.3, 0.02 + Math.sin(ang) * 0.3, z0]);
+    b.push([cx + Math.cos(ang) * 0.25, 0.02 + Math.sin(ang) * 0.25, z1]);
+  }
+  for (let i = 0; i < 6; i++) {
+    jet.quad(a[i], a[(i + 1) % 6], b[(i + 1) % 6], b[i], JET_DARK,
+      [(a[i][0] + b[i][0]) / 2 - cx, (a[i][1] + b[i][1]) / 2 - 0.02, 0]);
+  }
+  for (let i = 0; i < 6; i++) jet.tri([cx, 0.02, z1], b[i], b[(i + 1) % 6], rgb('#7a3b24'), [0, 0, 1]);
+}
+buildNozzle(1); buildNozzle(-1);
+const jetMesh = jet.build();
+
+/* ---------- drone ---------- */
+const drone = new MeshBuilder();
+const dTop = [], dBot = [];
+for (let i = 0; i < 6; i++) {
+  const a = i / 6 * TAU;
+  dTop.push([Math.cos(a) * 5, 0.7, Math.sin(a) * 5]);
+  dBot.push([Math.cos(a) * 5, -0.6, Math.sin(a) * 5]);
+}
+const DRONE_TOP = rgb('#4a5168'), DRONE_BOT = rgb('#2b3041'), DRONE_SIDE = rgb('#202434');
+for (let i = 0; i < 6; i++) {
+  drone.tri([0, 0.85, 0], dTop[i], dTop[(i + 1) % 6], DRONE_TOP, [0, 1, 0]);
+  drone.tri([0, -0.75, 0], dBot[(i + 1) % 6], dBot[i], DRONE_BOT, [0, -1, 0]);
+  drone.quad(dTop[i], dTop[(i + 1) % 6], dBot[(i + 1) % 6], dBot[i], DRONE_SIDE,
+    [(dTop[i][0] + dTop[(i + 1) % 6][0]) / 2, 0, (dTop[i][2] + dTop[(i + 1) % 6][2]) / 2]);
+}
+drone.tri([0, 1.05, 0], [-1.6, 0.86, 1.2], [1.6, 0.86, 1.2], JET_ORANGE, [0, 1, 0]);
+drone.tri([0, 1.05, 0], [1.6, 0.86, -1.2], [-1.6, 0.86, -1.2], JET_ORANGE, [0, 1, 0]);
+const droneMesh = drone.build();
+
+/* ---------- afterburner cones ---------- */
+const burnPos = [], burnT = [];
+function addBurnCone(cx, cy, r) {
+  const segs = 9;
+  for (let i = 0; i < segs; i++) {
+    const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
+    burnPos.push(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0);
+    burnPos.push(cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0);
+    burnPos.push(cx, cy, 1);
+    burnT.push(0, 0, 1);
+  }
+}
+addBurnCone(0.44, 0.02, 0.27); addBurnCone(-0.44, 0.02, 0.27);
+const burnVao = gl.createVertexArray();
+gl.bindVertexArray(burnVao);
+{
+  const inter = new Float32Array(burnT.length * 4);
+  for (let i = 0; i < burnT.length; i++) {
+    inter[i * 4] = burnPos[i * 3]; inter[i * 4 + 1] = burnPos[i * 3 + 1]; inter[i * 4 + 2] = burnPos[i * 3 + 2]; inter[i * 4 + 3] = burnT[i];
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf(inter));
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
+}
+gl.bindVertexArray(null);
+const burnCount = burnT.length;
+
+/* ---------- puff textures ---------- */
+function makePuffTex(glow) {
+  const S = 32;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(S, S), d = img.data;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const dx = (x + 0.5) / S * 2 - 1, dy = (y + 0.5) / S * 2 - 1;
+    const r = Math.min(1, Math.hypot(dx, dy));
+    let a = 1 - r;
+    a = glow ? Math.pow(a, 2.1) : Math.pow(a, 1.15) * (0.55 + 0.45 * vnoise(x * 0.55 + 3, y * 0.55 + 7));
+    const i = (y * S + x) * 4;
+    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = clamp(a, 0, 1) * 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const smokeTex = makePuffTex(false);
+const glowTex = makePuffTex(true);
+
+/* ---------- dynamic point buffer ---------- */
+const POINT_MAX = 900;
+const pointData = new Float32Array(POINT_MAX * 8);
+const pointVao = gl.createVertexArray();
+const pointVbo = gl.createBuffer();
+gl.bindVertexArray(pointVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, pointVbo);
+gl.bufferData(gl.ARRAY_BUFFER, pointData.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 32, 12);
+gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 32, 24);
+gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 32, 28);
+gl.bindVertexArray(null);
+
+/* ---------- dynamic particle buffers ---------- */
+function makeParticleVAO(max) {
+  const data = new Float32Array(max * 60);
+  const vao = gl.createVertexArray();
+  const vbo = gl.createBuffer();
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+  gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 40, 12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 40, 20);
+  gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 40, 36);
+  gl.bindVertexArray(null);
+  return { vao, vbo, data, max };
+}
+const smokeBatch = makeParticleVAO(240);
+const glowBatch = makeParticleVAO(260);
+
+/* ============================================================
+   PIXEL FONT / HUD DRAW
+   ============================================================ */
+const CHARSET = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?/+-%()[]<>';
+const COL = { bone: '#f2e6d0', amber: '#ffb45c', red: '#ff5a5f', dim: '#8f84a2', dark: '#1a1524', white: '#ffffff' };
+const ATLAS = {};
+function buildAtlas(color) {
+  const SH = 12;
+  const c = document.createElement('canvas');
+  c.width = 760; c.height = SH;
+  const x = c.getContext('2d');
+  x.font = 'bold 10px "Courier New", monospace';
+  x.textBaseline = 'top';
+  x.fillStyle = '#fff';
+  let px = 1;
+  const map = {};
+  for (const ch of CHARSET) {
+    const w = Math.max(1, Math.ceil(x.measureText(ch).width));
+    x.fillText(ch, px, 0);
+    map[ch] = { x: px, w };
+    px += w + 1;
+  }
+  const img = x.getImageData(0, 0, c.width, SH), d = img.data;
+  const col = rgb(color);
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] > 64) {
+      d[i] = col[0] * 255; d[i + 1] = col[1] * 255; d[i + 2] = col[2] * 255; d[i + 3] = 255;
+    } else d[i + 3] = 0;
+  }
+  x.putImageData(img, 0, 0);
+  return { c, map, h: SH };
+}
+function atlas(color) { if (!ATLAS[color]) ATLAS[color] = buildAtlas(color); return ATLAS[color]; }
+function textWidth(str, scale, spacing) {
+  const a = atlas(COL.bone);
+  let w = 0;
+  for (const ch of (str + '').toUpperCase()) { const m = a.map[ch] || a.map[' ']; w += (m.w + (spacing || 0)) * (scale || 1); }
+  return w;
+}
+function drawText(str, x, y, color, scale, spacing) {
+  const a = atlas(color);
+  scale = scale || 1; spacing = spacing || 0;
+  str = (str + '').toUpperCase();
+  let px = x | 0;
+  const py = y | 0;
+  for (const ch of str) {
+    const m = a.map[ch] || a.map[' '];
+    hud.drawImage(a.c, m.x, 0, m.w, a.h, px, py, m.w * scale, a.h * scale);
+    px += (m.w + spacing) * scale;
+  }
+  return px;
+}
+function drawTextSh(str, x, y, color, scale, spacing) {
+  drawText(str, x + 1, y + 1, COL.dark, scale, spacing);
+  drawText(str, x, y, color, scale, spacing);
+}
+function drawTextC(str, cx, y, color, scale, spacing) {
+  const w = textWidth(str, scale, spacing);
+  drawTextSh(str, Math.round(cx - w / 2), y, color, scale, spacing);
+}
+function drawTextR(str, rx, y, color, scale, spacing) {
+  const w = textWidth(str, scale, spacing);
+  drawTextSh(str, Math.round(rx - w), y, color, scale, spacing);
+}
+
+/* ============================================================
+   RESIZE
+   ============================================================ */
+const frameEl = document.getElementById('frame');
+let viewScale = 2;
+function resize() {
+  // Integer upscaling keeps pixels crisp; allow fractional downscaling so the
+  // game also fits small embeds like a narrow landing-page demo frame.
+  const fit = Math.min(innerWidth / W, innerHeight / H);
+  const s = fit >= 1 ? Math.floor(fit) : fit;
+  viewScale = s;
+  frameEl.style.width = (W * s) + 'px';
+  frameEl.style.height = (H * s) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+const keys = Object.create(null);
+let mouseDX = 0, mouseDY = 0;
+window.addEventListener('keydown', e => {
+  const k = e.code;
+  if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
+  if (!keys[k]) {
+    if (k === 'Enter') onEnter();
+    else if (k === 'KeyF') fireMissile();
+    else if (k === 'KeyC') cycleCamera();
+    else if (k === 'Digit1') setCamera(0);
+    else if (k === 'Digit2') setCamera(1);
+    else if (k === 'Digit3') setCamera(2);
+    else if (k === 'KeyB') startBarrel();
+    else if (k === 'KeyM') audio.toggle();
+    else if (k === 'KeyP' || k === 'Escape') togglePause();
+    else if (k === 'KeyR') restart();
+  }
+  keys[k] = true;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+glCanvas.addEventListener('mousedown', () => {
+  audio.init();
+  if (game.state === 'play' && glCanvas.requestPointerLock) {
+    try { glCanvas.requestPointerLock(); } catch (err) { }
+  }
+});
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === glCanvas) {
+    mouseDX += e.movementX;
+    mouseDY += e.movementY;
+  }
+});
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+/* ============================================================
+   AUDIO
+   ============================================================ */
+const audio = {
+  ctx: null, master: null, eng: null, engFilter: null, osc1: null, osc2: null,
+  wind: null, windGain: null, boostGain: null, muted: false,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = new AC();
+      this.ctx = ctx;
+      this.master = ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : 0.32;
+      this.master.connect(ctx.destination);
+
+      this.engFilter = ctx.createBiquadFilter();
+      this.engFilter.type = 'lowpass';
+      this.engFilter.frequency.value = 420;
+      this.eng = ctx.createGain();
+      this.eng.gain.value = 0.0;
+      this.osc1 = ctx.createOscillator(); this.osc1.type = 'sawtooth'; this.osc1.frequency.value = 58;
+      this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.frequency.value = 58.7;
+      this.osc1.connect(this.engFilter); this.osc2.connect(this.engFilter);
+      this.engFilter.connect(this.eng); this.eng.connect(this.master);
+      this.osc1.start(); this.osc2.start();
+
+      const len = ctx.sampleRate * 2;
+      const nb = ctx.createBuffer(1, len, ctx.sampleRate);
+      const nd = nb.getChannelData(0);
+      for (let i = 0; i < len; i++) nd[i] = Math.random() * 2 - 1;
+      this.noiseBuf = nb;
+
+      const windSrc = ctx.createBufferSource(); windSrc.buffer = nb; windSrc.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 620; bp.Q.value = 0.5;
+      this.windGain = ctx.createGain(); this.windGain.gain.value = 0.035;
+      windSrc.connect(bp); bp.connect(this.windGain); this.windGain.connect(this.master);
+      windSrc.start();
+
+      const boostSrc = ctx.createBufferSource(); boostSrc.buffer = nb; boostSrc.loop = true;
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1400;
+      this.boostGain = ctx.createGain(); this.boostGain.gain.value = 0.0;
+      boostSrc.connect(hp); hp.connect(this.boostGain); this.boostGain.connect(this.master);
+      boostSrc.start();
+    } catch (e) { console.warn('audio unavailable', e); }
+  },
+  update(speed, boost) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.osc1.frequency.setTargetAtTime(40 + speed * 0.22, t, 0.12);
+    this.osc2.frequency.setTargetAtTime(40.5 + speed * 0.23, t, 0.12);
+    this.engFilter.frequency.setTargetAtTime(300 + speed * 3.4, t, 0.15);
+    this.eng.gain.setTargetAtTime(0.028 + speed * 0.00016, t, 0.2);
+    this.boostGain.gain.setTargetAtTime(boost * 0.05, t, 0.12);
+    this.windGain.gain.setTargetAtTime(0.018 + speed * 0.0002, t, 0.2);
+  },
+  burst(dur, freq, q, gain, sweep) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this.noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q || 1;
+    f.frequency.setValueAtTime(freq, t);
+    if (sweep) f.frequency.exponentialRampToValueAtTime(Math.max(80, sweep), t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t); src.stop(t + dur + 0.05);
+  },
+  missile() { this.burst(0.55, 2600, 1.2, 0.16, 420); },
+  explosion() {
+    this.burst(1.1, 900, 0.6, 0.42, 90);
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(32, t + 0.5);
+    g.gain.setValueAtTime(0.30, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.65);
+  },
+  beep(f) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'square'; o.frequency.value = f || 660;
+    g.gain.setValueAtTime(0.045, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.1);
+  },
+  toggle() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.32, this.ctx.currentTime, 0.05);
+    if (!this.muted) this.beep(520);
+  }
+};
+
+/* ============================================================
+   GAME STATE
+   ============================================================ */
+const game = {
+  state: 'title', time: 0, timer: 120, score: 0, best: 0, newBest: false,
+  camMode: 0, camAngle: 0, shake: 0, msg: '', msgT: 0,
+  fps: 60, debug: location.search.indexOf('debug') >= 0
+};
+try { game.best = parseInt(localStorage.getItem('duskPatrolBest') || '0', 10) || 0; } catch (e) { }
+
+const START = [coastX(1060) - 160, 205, 1060];
+const plane = {
+  pos: START.slice(), yaw: 0, pitch: 0, roll: 0, barrel: 0, barrelT: 0,
+  speed: 175, boost: 0, alive: true, respawn: 0, throttle: 0.62,
+  inPitch: 0, inYaw: 0, inRoll: 0
+};
+const cam = { pos: [0, 0, 0], look: [0, 0, 1], up: [0, 1, 0], snap: true };
+const camMat = m4(), viewM = m4(), projM = m4(), vpM = m4();
+
+let mslAmmo = 8, mslCd = 0, mslReload = 0, missileSide = 1;
+const missiles = [], drones = [], smokeP = [], glowP = [], pops = [];
+
+function flightForward() {
+  const cp = Math.cos(plane.pitch);
+  return [-Math.sin(plane.yaw) * cp, Math.sin(plane.pitch), -Math.cos(plane.yaw) * cp];
+}
+
+/* ---------- particles ---------- */
+function spawnGlow(p, v, size, life, col, grow) {
+  if (glowP.length > 250) glowP.shift();
+  glowP.push({ p: p.slice(), v: v.slice(), size, life, max: life, col, grow: grow || 0, a: 1 });
+}
+function spawnSmoke(p, v, size, life, col, grow, alpha) {
+  if (smokeP.length > 230) smokeP.shift();
+  smokeP.push({ p: p.slice(), v: v.slice(), size, life, max: life, col, grow: grow || 0, a: alpha === undefined ? 0.6 : alpha });
+}
+function randDir(r) {
+  const z = r() * 2 - 1, a = r() * TAU, s = Math.sqrt(1 - z * z);
+  return [Math.cos(a) * s, z, Math.sin(a) * s];
+}
+function explode(p, scale) {
+  const r = mulberry32(((game.time * 997) | 0) + ((p[0] * 13) | 0));
+  for (let i = 0; i < 28; i++) {
+    const d = randDir(r);
+    spawnGlow(vadd(p, vmul(d, 2 + r() * 5)), vmul(d, 18 + r() * 55 * scale),
+      (4 + r() * 9) * scale, 0.35 + r() * 0.65, [1, 0.45 + r() * 0.5, 0.10 + r() * 0.15], 28);
+  }
+  spawnGlow(p, [0, 0, 0], 30 * scale, 0.16, [1, 0.92, 0.72], 120);
+  for (let i = 0; i < 14; i++) {
+    const d = randDir(r);
+    spawnSmoke(vadd(p, vmul(d, 3)), [d[0] * 6, 4 + r() * 10, d[2] * 6],
+      (4 + r() * 5) * scale, 1.0 + r() * 1.2, [0.38, 0.33, 0.34], 9, 0.55);
+  }
+}
+function updateParticles(dt) {
+  for (let i = smokeP.length - 1; i >= 0; i--) {
+    const s = smokeP[i];
+    s.p = vadd(s.p, vmul(s.v, dt)); s.v[1] += 2.2 * dt;
+    s.life -= dt; s.size += s.grow * dt;
+    if (s.life <= 0) smokeP.splice(i, 1);
+  }
+  for (let i = glowP.length - 1; i >= 0; i--) {
+    const g = glowP[i];
+    g.p = vadd(g.p, vmul(g.v, dt)); g.v[1] -= 18 * dt; g.v = vmul(g.v, 1 - 1.6 * dt);
+    g.life -= dt; g.size += g.grow * dt;
+    if (g.life <= 0) glowP.splice(i, 1);
+  }
+  for (let i = pops.length - 1; i >= 0; i--) { pops[i].t -= dt; if (pops[i].t <= 0) pops.splice(i, 1); }
+}
+
+/* ---------- drones ---------- */
+function resetDrones() {
+  drones.length = 0;
+  for (let i = 0; i < 8; i++) {
+    const h = droneHome(i);
+    drones.push({ home: h.slice(), pos: h.slice(), alive: true, respawn: 0, phase: i * 1.7, rot: i * 0.9 });
+  }
+}
+function killDrone(d) {
+  if (!d.alive) return;
+  d.alive = false; d.respawn = 13 + Math.random() * 5;
+  explode(d.pos, 1.0);
+  game.score += 100;
+  pops.push({ p: d.pos.slice(), text: '+100', t: 1.3 });
+  game.shake = Math.max(game.shake, 0.35);
+  audio.explosion();
+}
+function updateDrones(dt) {
+  for (const d of drones) {
+    if (!d.alive) {
+      d.respawn -= dt;
+      if (d.respawn <= 0) {
+        const h = droneHome((Date.now() / 997 | 0) % 1000);
+        d.home = h.slice(); d.pos = h.slice(); d.alive = true;
+        d.phase = Math.random() * 6; d.rot = Math.random() * 6;
+      }
+      continue;
+    }
+    d.rot += dt * 0.8;
+    d.pos[1] = d.home[1] + Math.sin(game.time * 1.2 + d.phase) * 5;
+  }
+}
+
+/* ---------- missiles ---------- */
+function fireMissile() {
+  if (game.state !== 'play' || !plane.alive || mslAmmo <= 0 || mslCd > 0) return;
+  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const right = [camMat[0], camMat[1], camMat[2]], up = [camMat[4], camMat[5], camMat[6]];
+  const fwd = flightForward();
+  const p = vadd(vadd(plane.pos, vmul(right, 3.2 * missileSide)), vadd(vmul(up, -0.28), vmul(fwd, 1.0)));
+  missileSide *= -1;
+  let target = null, best = 0.86;
+  for (const d of drones) {
+    if (!d.alive) continue;
+    const dir = vnorm(vsub(d.pos, p)), dd = vdot(fwd, dir);
+    if (dd > best) { best = dd; target = d; }
+  }
+  missiles.push({ p, v: vmul(fwd, 420), life: 5, trail: 0, target });
+  mslAmmo--; mslCd = 0.42;
+  game.shake = Math.max(game.shake, 0.22);
+  audio.missile();
+}
+function updateMissiles(dt) {
+  mslCd = Math.max(0, mslCd - dt);
+  mslReload += dt;
+  if (mslReload > 3) { mslReload = 0; if (mslAmmo < 8) mslAmmo++; }
+  for (let i = missiles.length - 1; i >= 0; i--) {
+    const m = missiles[i];
+    m.life -= dt;
+    if (m.target && m.target.alive) {
+      const want = vnorm(vsub(m.target.pos, m.p));
+      const cur = vnorm(m.v);
+      m.v = vmul(vnorm(vlerp(cur, want, clamp(dt * 3.0, 0, 1))), 440);
+    }
+    m.p = vadd(m.p, vmul(m.v, dt));
+    m.trail -= dt;
+    if (m.trail <= 0) {
+      spawnSmoke(vadd(m.p, vmul(vnorm(m.v), -1.2)), [0, 1.2, 0], 1.6, 0.7, [0.72, 0.66, 0.62], 9, 0.5);
+      m.trail = 0.026;
+    }
+    let dead = false;
+    if (m.target && m.target.alive && vdist(m.p, m.target.pos) < 18) {
+      killDrone(m.target); dead = true;
+    } else if (m.p[1] < Math.max(terrainHeight(m.p[0], m.p[2]), 0) + 1) {
+      explode(m.p, 0.7); audio.explosion(); dead = true;
+    } else if (m.life <= 0) {
+      explode(m.p, 0.4); dead = true;
+    }
+    if (dead) missiles.splice(i, 1);
+  }
+}
+
+/* ---------- plane ---------- */
+function crash() {
+  if (!plane.alive) return;
+  if (game.camMode === 1) { game.camMode = 0; cam.snap = true; }
+  plane.alive = false; plane.respawn = 2.0;
+  explode(plane.pos, 1.8);
+  game.shake = 1.2; game.msg = 'CRASHED'; game.msgT = 2.0;
+  audio.explosion();
+}
+function respawnPlane() {
+  plane.pos = START.slice();
+  plane.yaw = 0; plane.pitch = 0; plane.roll = 0;
+  plane.barrel = 0; plane.barrelT = 0;
+  plane.speed = 175; plane.boost = 0; plane.alive = true;
+  cam.snap = true;
+}
+function startBarrel() {
+  if (game.state === 'play' && plane.alive && plane.barrelT <= 0) { plane.barrelT = 0.9; audio.beep(880); }
+}
+function updatePlane(dt) {
+  if (game.state !== 'play') return;
+  if (!plane.alive) {
+    plane.respawn -= dt;
+    if (plane.respawn <= 0) respawnPlane();
+    return;
+  }
+  let pIn = ((keys.KeyW || keys.ArrowUp) ? 1 : 0) - ((keys.KeyS || keys.ArrowDown) ? 1 : 0);
+  let yIn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
+  let rIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+  pIn += clamp(-mouseDY * 0.035, -1, 1);
+  yIn += clamp(-mouseDX * 0.03, -1, 1);
+  mouseDX *= 0.86; mouseDY *= 0.86;
+
+  const k = 1 - Math.exp(-dt * 9);
+  plane.inPitch = lerp(plane.inPitch, clamp(pIn, -1, 1), k);
+  plane.inYaw = lerp(plane.inYaw, clamp(yIn, -1, 1), k);
+  plane.inRoll = lerp(plane.inRoll, clamp(rIn, -1, 1), k);
+
+  // Full aerobatics: pitch and roll wrap instead of stopping at 90/180 degrees.
+  plane.pitch = wrapAngle(plane.pitch + plane.inPitch * 1.5 * dt);
+  plane.roll = wrapAngle(plane.roll + plane.inRoll * 3.0 * dt);
+  if (Math.abs(rIn) < 0.02 && Math.abs(plane.inRoll) < 0.06) {
+    plane.roll = wrapAngle(plane.roll + Math.atan2(Math.sin(-plane.roll), Math.cos(-plane.roll)) * (1 - Math.exp(-dt * 1.05)));
+  }
+  const yawRate = plane.inYaw * 0.8 + Math.sin(plane.roll) * 1.12;
+  plane.yaw += yawRate * dt;
+
+  const boostKey = keys.ShiftLeft || keys.ShiftRight || keys.Space;
+  plane.boost = lerp(plane.boost, boostKey ? 1 : 0, 1 - Math.exp(-dt * 3.2));
+
+  const fwd = flightForward();
+  const target = 130 + plane.throttle * 85 + plane.boost * 145;
+  plane.speed += (target - plane.speed) * dt * 0.7 - fwd[1] * 27 * dt;
+  plane.speed = clamp(plane.speed, 92, 395);
+
+  plane.pos[0] += fwd[0] * plane.speed * dt;
+  plane.pos[1] += fwd[1] * plane.speed * dt;
+  plane.pos[2] += fwd[2] * plane.speed * dt;
+
+  if (plane.barrelT > 0) {
+    plane.barrelT -= dt;
+    const t = clamp(1 - plane.barrelT / 0.9, 0, 1);
+    plane.barrel = TAU * smoothstep(0, 1, t);
+    if (plane.barrelT <= 0) plane.barrel = 0;
+  }
+
+  if (plane.boost > 0.5) game.shake = Math.max(game.shake, 0.05);
+  const gh = Math.max(terrainHeight(plane.pos[0], plane.pos[2]), 0);
+  if (plane.pos[1] < gh + 3.2) crash();
+  if (Math.abs(plane.pos[0]) > 6200 || Math.abs(plane.pos[2]) > 6200) crash();
+  audio.update(plane.speed, plane.boost);
+}
+
+function updateTitlePlane() {
+  const a = game.time * 0.075, R = 780;
+  plane.pos[0] = -60 + Math.cos(a) * R;
+  plane.pos[2] = Math.sin(a) * R;
+  plane.pos[1] = 235 + Math.sin(game.time * 0.5) * 10;
+  plane.yaw = Math.PI - a;
+  plane.pitch = 0; plane.roll = 0.30; plane.speed = 210; plane.boost = 0.12;
+}
+
+/* ---------- camera ---------- */
+// Chase smoothing time constants. The same values drive velocity compensation
+// so exponential smoothing produces zero steady-state lag behind the jet.
+const CHASE_TAU = { pos: 0.12, look: 0.07, up: 0.10 };
+function updateCamera(dt) {
+  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const right = [camMat[0], camMat[1], camMat[2]];
+  const up = [camMat[4], camMat[5], camMat[6]];
+  const fwd = [-camMat[8], -camMat[9], -camMat[10]];
+
+  let eye = null, look = null, upv = [0, 1, 0], fov = 62, snap = false;
+
+  if (game.state === 'title') {
+    const a = game.time * 0.17;
+    eye = [plane.pos[0] + Math.cos(a) * 36, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 36];
+    look = vadd(plane.pos, [0, 1, 0]);
+    upv = [0, 1, 0]; fov = 55;
+    snap = true;
+  } else if (game.camMode === 1 && plane.alive) {
+    eye = vadd(vadd(plane.pos, vmul(fwd, 2.3)), vmul(up, 0.95));
+    look = vadd(eye, vmul(fwd, 120));
+    upv = up; fov = 69 + plane.boost * 8;
+    snap = true;
+  } else if (game.camMode === 2) {
+    game.camAngle += dt * 0.22;
+    eye = [plane.pos[0] + Math.cos(game.camAngle) * 30, plane.pos[1] + 9 + Math.sin(game.camAngle * 0.7) * 4, plane.pos[2] + Math.sin(game.camAngle) * 30];
+    look = vadd(plane.pos, [0, 1, 0]);
+    upv = [0, 1, 0]; fov = 58;
+    snap = true;
+  } else {
+    const blend = vnorm(vlerp([0, 1, 0], up, 0.36));
+    const dist = 18 + plane.speed * 0.01;
+    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vmul(blend, 5.8));
+    look = vadd(plane.pos, vadd(vmul(fwd, 70), vmul(up, 2.4)));
+    upv = blend; fov = 60 + plane.boost * 11;
+    if (game.state === 'results') {
+      game.camAngle += dt * 0.22;
+      eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
+      look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
+      snap = true;
+    } else if (game.state === 'play' && plane.alive) {
+      // Velocity compensation cancels the steady-state lag of exponential
+      // smoothing, keeping the jet framed while turns and loops ease in.
+      const vel = vmul(fwd, plane.speed);
+      eye = vadd(eye, vmul(vel, CHASE_TAU.pos));
+      look = vadd(look, vmul(vel, CHASE_TAU.look));
+    } else {
+      snap = true;
+    }
+  }
+
+  if (snap || cam.snap) {
+    cam.pos = eye.slice(); cam.look = look.slice(); cam.up = upv.slice(); cam.snap = false;
+  } else {
+    cam.pos = vlerp(cam.pos, eye, 1 - Math.exp(-dt / CHASE_TAU.pos));
+    cam.look = vlerp(cam.look, look, 1 - Math.exp(-dt / CHASE_TAU.look));
+    cam.up = vnorm(vlerp(cam.up, upv, 1 - Math.exp(-dt / CHASE_TAU.up)));
+  }
+  if (game.camMode !== 1) {
+    const gh = terrainHeight(cam.pos[0], cam.pos[2]);
+    if (cam.pos[1] < gh + 3) cam.pos[1] = gh + 3;
+  }
+  const sh = game.shake * 2.4;
+  let shakeX = 0, shakeY = 0, shakeZ = 0;
+  if (sh > 0.02) {
+    shakeX = (Math.random() - 0.5) * sh; shakeY = (Math.random() - 0.5) * sh; shakeZ = (Math.random() - 0.5) * sh;
+  }
+  m4look(viewM, [cam.pos[0] + shakeX, cam.pos[1] + shakeY, cam.pos[2] + shakeZ],
+    [cam.look[0] + shakeX * 1.5, cam.look[1] + shakeY * 1.5, cam.look[2] + shakeZ * 1.5], cam.up);
+  m4persp(projM, fov * DEG, W / H, 1, 9000);
+  m4mul(vpM, projM, viewM);
+}
+
+/* ---------- state transitions ---------- */
+function startGame() {
+  game.state = 'play';
+  game.timer = 120; game.score = 0; game.camMode = 0; game.newBest = false;
+  game.shake = 0; game.msg = ''; game.msgT = 0; game.camAngle = 0;
+  mslAmmo = 8; mslCd = 0; mslReload = 0; missileSide = 1;
+  missiles.length = 0; smokeP.length = 0; glowP.length = 0; pops.length = 0;
+  resetDrones(); respawnPlane();
+  audio.init(); audio.beep(680);
+}
+function endGame() {
+  if (game.state !== 'play') return;
+  game.state = 'results';
+  if (game.score > game.best) {
+    game.best = game.score;
+    game.newBest = true;
+    try { localStorage.setItem('duskPatrolBest', String(game.best)); } catch (e) { }
+  }
+  game.camAngle = Math.atan2(cam.pos[2] - plane.pos[2], cam.pos[0] - plane.pos[0]);
+  audio.beep(440);
+}
+function onEnter() {
+  audio.init();
+  if (game.state === 'title' || game.state === 'results') startGame();
+  else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
+}
+function restart() {
+  audio.init();
+  startGame();
+}
+function togglePause() {
+  if (game.state === 'play') { game.state = 'pause'; audio.beep(300); }
+  else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
+}
+function setCamera(mode) {
+  if (game.state !== 'play' || game.camMode === mode) return;
+  game.camMode = mode;
+  cam.snap = true;
+  audio.beep(840);
+}
+function cycleCamera() { setCamera((game.camMode + 1) % 3); }
+
+/* ---------- master update ---------- */
+function update(dt) {
+  game.time += dt;
+  game.shake = Math.max(0, game.shake - dt * 1.7);
+  if (game.msgT > 0) game.msgT -= dt;
+
+  if (game.state === 'title') {
+    updateTitlePlane();
+    updateDrones(dt);
+    updateParticles(dt);
+  } else if (game.state === 'play') {
+    game.timer -= dt;
+    updatePlane(dt);
+    updateDrones(dt);
+    updateMissiles(dt);
+    updateParticles(dt);
+    if (game.timer <= 0) { game.timer = 0; endGame(); }
+  } else if (game.state === 'results') {
+    updateDrones(dt);
+    updateParticles(dt);
+  }
+  updateCamera(dt);
+}
+
+/* ============================================================
+   RENDER — scene
+   ============================================================ */
+const IDENT = m4id(m4());
+const dext = m4(), dj = m4(), dk = m4();
+const cloudM = m4();
+const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+const camRight = [1, 0, 0], camUp = [0, 1, 0];
+
+function drawSky() {
+  gl.useProgram(skyProg);
+  const fwd = vnorm(vsub(cam.look, cam.pos));
+  const right = vnorm(vcross(fwd, cam.up));
+  const up = vcross(right, fwd);
+  const tanFov = 1 / projM[5];
+  gl.uniform3fv(U(skyProg, 'uRight'), right);
+  gl.uniform3fv(U(skyProg, 'uUp'), up);
+  gl.uniform3fv(U(skyProg, 'uFwd'), fwd);
+  gl.uniform3fv(U(skyProg, 'uSun'), SUN_DIR);
+  gl.uniform1f(U(skyProg, 'uTanFov'), tanFov);
+  gl.uniform1f(U(skyProg, 'uAspect'), W / H);
+  gl.uniform1f(U(skyProg, 'uTime'), game.time);
+  gl.bindVertexArray(fsVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function beginSolid() {
+  gl.useProgram(solidProg);
+  gl.uniformMatrix4fv(U(solidProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(solidProg, 'uSun'), SUN_DIR);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), [1.0, 0.78, 0.50]);
+  gl.uniform3fv(U(solidProg, 'uAmbient'), [0.44, 0.42, 0.64]);
+  gl.uniform3fv(U(solidProg, 'uFogColor'), FOG_COL);
+  gl.uniform1f(U(solidProg, 'uFogDensity'), FOG_DENS);
+  gl.uniform3fv(U(solidProg, 'uCam'), cam.pos);
+  gl.uniform1f(U(solidProg, 'uSpec'), 0.0);
+}
+
+function drawTerrain() {
+  beginSolid();
+  gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, IDENT);
+  updateFrustum(vpM);
+  game.visibleChunks = 0;
+  for (const ch of terrainChunks) {
+    if (!boxInFrustum(ch.min, ch.max)) continue;
+    gl.bindVertexArray(ch.vao);
+    gl.drawArrays(gl.TRIANGLES, ch.first, ch.count);
+    game.visibleChunks++;
+  }
+  gl.bindVertexArray(null);
+}
+
+function drawWater() {
+  gl.useProgram(waterProg);
+  gl.uniformMatrix4fv(U(waterProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(waterProg, 'uCam'), cam.pos);
+  gl.uniform3fv(U(waterProg, 'uSun'), SUN_DIR);
+  gl.uniform3fv(U(waterProg, 'uFogColor'), FOG_COL);
+  gl.uniform1f(U(waterProg, 'uTime'), game.time);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, heightTex);
+  gl.uniform1i(U(waterProg, 'uHeight'), 0);
+  gl.bindVertexArray(waterVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+function drawCity() {
+  gl.useProgram(cityProg);
+  gl.uniformMatrix4fv(U(cityProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(cityProg, 'uSun'), SUN_DIR);
+  gl.uniform3fv(U(cityProg, 'uSunColor'), [1.0, 0.78, 0.50]);
+  gl.uniform3fv(U(cityProg, 'uAmbient'), [0.44, 0.42, 0.64]);
+  gl.uniform3fv(U(cityProg, 'uFogColor'), FOG_COL);
+  gl.uniform1f(U(cityProg, 'uFogDensity'), FOG_DENS);
+  gl.uniform3fv(U(cityProg, 'uCam'), cam.pos);
+  gl.uniform1f(U(cityProg, 'uTime'), game.time);
+  gl.bindVertexArray(cityVao);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, buildings.length);
+}
+
+function drawJet() {
+  const m = m4();
+  planeMatrix(m, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  beginSolid();
+  gl.uniform3fv(U(solidProg, 'uAmbient'), [0.58, 0.56, 0.74]);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), [1.0, 0.80, 0.55]);
+  gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
+  gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
+  gl.bindVertexArray(jetMesh.vao);
+  gl.drawArrays(gl.TRIANGLES, 0, jetMesh.count);
+
+  gl.useProgram(burnProg);
+  gl.uniformMatrix4fv(U(burnProg, 'uVP'), false, vpM);
+  gl.uniformMatrix4fv(U(burnProg, 'uModel'), false, m);
+  gl.uniform1f(U(burnProg, 'uLen'), 2.6 + plane.boost * 7.5);
+  gl.uniform1f(U(burnProg, 'uZ0'), 4.9);
+  gl.uniform1f(U(burnProg, 'uIntensity'), 0.28 + plane.boost * 0.92);
+  gl.uniform1f(U(burnProg, 'uTime'), game.time);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.bindVertexArray(burnVao);
+  gl.drawArrays(gl.TRIANGLES, 0, burnCount);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
+function drawDrones() {
+  beginSolid();
+  for (const d of drones) {
+    if (!d.alive) continue;
+    m4trans(dext, d.pos[0], d.pos[1], d.pos[2]);
+    m4rotY(dj, d.rot);
+    m4mul(dk, dext, dj);
+    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, dk);
+    gl.bindVertexArray(droneMesh.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, droneMesh.count);
+  }
+}
+
+function drawClouds() {
+  gl.useProgram(cloudProg);
+  gl.uniformMatrix4fv(U(cloudProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(cloudProg, 'uFogColor'), FOG_COL);
+  gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
+  gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
+  gl.uniform1i(U(cloudProg, 'uTex'), 0);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindVertexArray(cloudVao);
+  for (const c of cloudDefs) {
+    const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    const p = [cx, c.y, c.z];
+    const dir = vnorm(vsub(cam.pos, p));
+    let right = vcross([0, 1, 0], dir);
+    if (vlen(right) < 0.01) right = [1, 0, 0];
+    right = vnorm(right);
+    const up = [0, 1, 0];
+    cloudM[0] = right[0] * c.sx; cloudM[1] = right[1] * c.sx; cloudM[2] = right[2] * c.sx; cloudM[3] = 0;
+    cloudM[4] = up[0] * c.sy; cloudM[5] = up[1] * c.sy; cloudM[6] = up[2] * c.sy; cloudM[7] = 0;
+    cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
+    cloudM[12] = p[0]; cloudM[13] = p[1]; cloudM[14] = p[2]; cloudM[15] = 1;
+    gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
+    gl.uniform3fv(U(cloudProg, 'uTint'), [1.0, 0.80 + Math.sin(c.drift) * 0.04, 0.68]);
+    gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
+    gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+}
+
+function buildPoints() {
+  let n = 0;
+  const put = (p, col, size, phase) => {
+    if (n >= POINT_MAX) return;
+    const o = n * 8;
+    pointData[o] = p[0]; pointData[o + 1] = p[1]; pointData[o + 2] = p[2];
+    pointData[o + 3] = col[0]; pointData[o + 4] = col[1]; pointData[o + 5] = col[2];
+    pointData[o + 6] = size; pointData[o + 7] = phase;
+    n++;
+  };
+  for (let i = 0; i < streetLights.length; i++) put(streetLights[i], [1.0, 0.60, 0.26], 1.25, i * 0.37);
+  for (const d of drones) {
+    if (!d.alive) continue;
+    put([d.pos[0], d.pos[1] + 2.2, d.pos[2]], [1.0, 0.18, 0.12], -2.2, d.phase);
+  }
+  for (const m of missiles) put(m.p, [1.0, 0.86, 0.55], 1.9, game.time);
+  const showJet = game.state !== 'title' ? (game.camMode !== 1 && plane.alive) : plane.alive;
+  if (showJet) {
+    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+    const right = [camMat[0], camMat[1], camMat[2]];
+    const pl = vadd(plane.pos, vmul(right, 4.9));
+    const pr = vadd(plane.pos, vmul(right, -4.9));
+    put([pl[0], pl[1], pl[2]], [1.0, 0.18, 0.18], -1.0, 0.0);
+    put([pr[0], pr[1], pr[2]], [0.35, 1.0, 0.55], -1.0, 0.5);
+  }
+  if (n > 0) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, pointVbo);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, pointData.subarray(0, n * 8));
+  }
+  return n;
+}
+function drawPoints(n) {
+  if (n <= 0) return;
+  gl.useProgram(pointProg);
+  gl.uniformMatrix4fv(U(pointProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(pointProg, 'uCam'), cam.pos);
+  gl.uniform1f(U(pointProg, 'uTime'), game.time);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.bindVertexArray(pointVao);
+  gl.drawArrays(gl.POINTS, 0, n);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
+function fillParticles(list, batch, glowMode) {
+  const d = batch.data;
+  let n = 0;
+  for (const p of list) {
+    if (n >= batch.max) break;
+    const t = clamp(p.life / p.max, 0, 1);
+    let a = glowMode ? Math.min(1, t * 1.5) : t * p.a;
+    if (a <= 0.01) continue;
+    const s = p.size;
+    let o = n * 60;
+    for (let k = 0; k < 6; k++) {
+      d[o] = p.p[0]; d[o + 1] = p.p[1]; d[o + 2] = p.p[2];
+      d[o + 3] = CORNERS[k][0]; d[o + 4] = CORNERS[k][1];
+      d[o + 5] = p.col[0]; d[o + 6] = p.col[1]; d[o + 7] = p.col[2]; d[o + 8] = a;
+      d[o + 9] = s;
+      o += 10;
+    }
+    n++;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, batch.vbo);
+  if (n > 0) gl.bufferSubData(gl.ARRAY_BUFFER, 0, d.subarray(0, n * 60));
+  return n;
+}
+function drawParticleBatch(batch, count, tex, additive) {
+  if (count <= 0) return;
+  gl.useProgram(partProg);
+  gl.uniformMatrix4fv(U(partProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(partProg, 'uRight'), camRight);
+  gl.uniform3fv(U(partProg, 'uUp'), camUp);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(U(partProg, 'uTex'), 0);
+  gl.enable(gl.BLEND);
+  if (additive) gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.bindVertexArray(batch.vao);
+  gl.drawArrays(gl.TRIANGLES, 0, count * 6);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
+function renderScene() {
+  const fwd = vnorm(vsub(cam.look, cam.pos));
+  const rgt = vnorm(vcross(fwd, cam.up));
+  camRight[0] = rgt[0]; camRight[1] = rgt[1]; camRight[2] = rgt[2];
+  const upv = vcross(rgt, fwd);
+  camUp[0] = upv[0]; camUp[1] = upv[1]; camUp[2] = upv[2];
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+  gl.viewport(0, 0, W, H);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  gl.disable(gl.CULL_FACE);
+  gl.clearColor(0.05, 0.05, 0.08, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.disable(gl.DEPTH_TEST);
+  gl.depthMask(false);
+  drawSky();
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+
+  drawTerrain();
+  drawWater();
+  drawCity();
+  const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
+  if (showJet) drawJet();
+  drawDrones();
+  drawClouds();
+
+  const pn = buildPoints();
+  drawPoints(pn);
+  const sc = fillParticles(smokeP, smokeBatch, false);
+  drawParticleBatch(smokeBatch, sc, smokeTex, false);
+  const gc = fillParticles(glowP, glowBatch, true);
+  drawParticleBatch(glowBatch, gc, glowTex, true);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+  gl.useProgram(postProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.uniform1i(U(postProg, 'uScene'), 0);
+  gl.bindVertexArray(fsVao);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ============================================================
+   HUD
+   ============================================================ */
+function pad(n, w) { return String(Math.max(0, Math.floor(n))).padStart(w, '0'); }
+function fmtTime(t) { const s = Math.ceil(Math.max(0, t)); return pad(Math.floor(s / 60), 2) + ':' + pad(s % 60, 2); }
+function blinkOn(rate) { return Math.sin(game.time * rate) > -0.2; }
+
+function drawReticle() {
+  hud.fillStyle = 'rgba(242,230,208,0.82)';
+  hud.fillRect(235, 134, 3, 1); hud.fillRect(242, 134, 3, 1);
+  hud.fillRect(239, 130, 1, 3); hud.fillRect(239, 137, 1, 3);
+  hud.fillStyle = 'rgba(255,180,92,0.9)';
+  hud.fillRect(239, 134, 2, 1);
+}
+
+function bestTarget() {
+  const fwd = vnorm(vsub(cam.look, cam.pos));
+  let best = null, bestDot = 0.55, bestDist = 1e9;
+  for (const d of drones) {
+    if (!d.alive) continue;
+    const to = vsub(d.pos, cam.pos), dist = vlen(to);
+    const dd = vdot(fwd, vscale(to, 1 / Math.max(dist, 0.001)));
+    if (dd > bestDot && dist < bestDist) { bestDot = dd; best = d; bestDist = dist; }
+  }
+  return best ? { d: best, dist: bestDist } : null;
+}
+function vscale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
+
+function drawTargetBox() {
+  const t = bestTarget();
+  if (!t) return;
+  const p = projPoint(vpM, t.d.pos);
+  if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > H - 22) return;
+  const x = Math.round(p[0]), y = Math.round(p[1]), s = 7;
+  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  hud.fillRect(x - s, y - s, 4, 1); hud.fillRect(x - s, y - s, 1, 4);
+  hud.fillRect(x + s - 3, y - s, 4, 1); hud.fillRect(x + s, y - s, 1, 4);
+  hud.fillRect(x - s, y + s, 4, 1); hud.fillRect(x - s, y + s - 3, 1, 4);
+  hud.fillRect(x + s - 3, y + s, 4, 1); hud.fillRect(x + s, y + s - 3, 1, 4);
+  drawTextC('DRONE ' + (t.dist / 1000).toFixed(1) + 'KM', x, y + 11, COL.amber, 1, 0);
+}
+
+function drawOffscreenArrow() {
+  if (!plane.alive) return;
+  const cx = W / 2, cy = H / 2, margin = 22;
+  let target = null, dist = 1e9;
+  for (const d of drones) {
+    if (!d.alive) continue;
+    const p = projPoint(vpM, d.pos);
+    const onScreen = p && p[0] > 14 && p[0] < W - 14 && p[1] > 24 && p[1] < H - 32;
+    if (onScreen) continue;
+    const dd = vlen(vsub(d.pos, plane.pos));
+    if (dd < dist) { target = d; dist = dd; }
+  }
+  if (!target) return;
+  const px = target.pos[0], py = target.pos[1], pz = target.pos[2];
+  const vx = viewM[0] * px + viewM[4] * py + viewM[8] * pz + viewM[12];
+  const vy = viewM[1] * px + viewM[5] * py + viewM[9] * pz + viewM[13];
+  const vz = viewM[2] * px + viewM[6] * py + viewM[10] * pz + viewM[14];
+  let ax = vx * projM[0], ay = -vy * projM[5];
+  if (vz > 0) { ax = -ax; ay = -ay; } // behind the camera: point the way to turn
+  let m = Math.hypot(ax, ay);
+  if (m < 1e-3) { ax = 0; ay = 1; m = 1; } // exactly behind: point down
+  ax /= m; ay /= m;
+  const halfW = cx - margin, halfH = cy - margin;
+  const t = Math.min(halfW / Math.max(Math.abs(ax), 1e-4), halfH / Math.max(Math.abs(ay), 1e-4));
+  const ex = Math.round(cx + ax * t), ey = Math.round(cy + ay * t);
+  hud.save();
+  hud.translate(ex, ey);
+  hud.rotate(Math.atan2(ay, ax));
+  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  hud.beginPath();
+  hud.moveTo(6, 0); hud.lineTo(-4, -5); hud.lineTo(-1, 0); hud.lineTo(-4, 5);
+  hud.closePath(); hud.fill();
+  hud.restore();
+  drawTextC((dist / 1000).toFixed(1) + 'KM',
+    clamp(Math.round(ex - ax * 12), 26, W - 26),
+    clamp(Math.round(ey - ay * 11), 22, H - 26), COL.amber, 1, 0);
+}
+
+function drawPops() {
+  for (const p of pops) {
+    const sp = projPoint(vpM, p.p);
+    if (!sp) continue;
+    hud.globalAlpha = clamp(p.t, 0, 1);
+    drawTextC(p.text, sp[0], sp[1] - 10, COL.amber, 1, 0);
+    hud.globalAlpha = 1;
+  }
+}
+
+function drawTitleScreen() {
+  hud.fillStyle = 'rgba(6,4,12,0.30)';
+  hud.fillRect(0, 0, W, H);
+  const tw = textWidth('DUSK PATROL', 3, 2);
+  const tx = Math.round((W - tw) / 2);
+  drawText('DUSK PATROL', tx + 2, 53, COL.dark, 3, 2);
+  drawText('DUSK PATROL', tx, 50, COL.amber, 3, 2);
+  hud.fillStyle = 'rgba(255,180,92,0.5)';
+  hud.fillRect(160, 104, 160, 1);
+  drawTextC('A PIXEL PATROL OVER THE COAST', 240, 112, COL.bone, 1, 0);
+  drawTextC('BEST  ' + pad(game.best, 6), 240, 126, COL.amber, 1, 0);
+  if (blinkOn(3.4)) drawTextC('PRESS ENTER TO FLY', 240, 154, COL.bone, 1, 1);
+
+  hud.fillStyle = 'rgba(8,6,16,0.42)';
+  hud.fillRect(96, 196, 288, 52);
+  hud.fillStyle = 'rgba(255,180,92,0.25)';
+  hud.fillRect(96, 196, 288, 1);
+  drawTextSh('WASD / ARROWS', 108, 204, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 210, 204, COL.bone, 1, 0);
+  drawTextSh('SHIFT / SPC', 108, 216, COL.amber, 1, 0); drawTextSh('BOOST', 210, 216, COL.bone, 1, 0);
+  drawTextSh('F', 108, 228, COL.amber, 1, 0); drawTextSh('MISSILE', 210, 228, COL.bone, 1, 0);
+  drawTextSh('C', 268, 204, COL.amber, 1, 0); drawTextSh('CAMERA', 288, 204, COL.bone, 1, 0);
+  drawTextSh('B', 268, 216, COL.amber, 1, 0); drawTextSh('BARREL ROLL', 288, 216, COL.bone, 1, 0);
+  drawTextSh('P / M', 268, 228, COL.amber, 1, 0); drawTextSh('PAUSE / MUTE', 306, 228, COL.bone, 1, 0);
+  drawTextC('1/2/3 VIEW  /  SHOOT THE TRAINING DRONES OVER THE BAY', 240, 254, COL.dim, 1, 0);
+}
+
+function drawCockpitFrame() {
+  hud.fillStyle = 'rgba(10,8,16,0.76)';
+  hud.fillRect(0, 0, W, 3);
+  hud.fillRect(0, 0, 3, H);
+  hud.fillRect(W - 3, 0, 3, H);
+  for (let i = 0; i < 12; i++) {
+    hud.fillRect(3 + i * 5, 3 + i * 2, 40 - i * 3, 2);
+    hud.fillRect(W - 43 + i * 3, 3 + i * 2, 40 - i * 3, 2);
+  }
+  hud.fillStyle = 'rgba(10,8,16,0.62)';
+  hud.fillRect(0, H - 27, W, 2);
+  hud.fillStyle = 'rgba(255,180,92,0.35)';
+  hud.fillRect(26, H - 23, 72, 1);
+  hud.fillRect(W - 98, H - 23, 72, 1);
+}
+
+function drawCockpitProjector() {
+  const cx = 240, cy = 134;
+  hud.fillStyle = 'rgba(255,180,92,0.34)';
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * TAU;
+    hud.fillRect(Math.round(cx + Math.cos(a) * 20), Math.round(cy + Math.sin(a) * 20), 1, 1);
+  }
+  hud.save();
+  hud.translate(cx, cy + clamp(plane.pitch * 70, -82, 82));
+  hud.rotate(-plane.roll);
+  hud.fillStyle = 'rgba(242,230,208,0.42)';
+  hud.fillRect(-48, 0, 34, 1); hud.fillRect(14, 0, 34, 1);
+  hud.fillStyle = 'rgba(255,180,92,0.62)';
+  hud.fillRect(-7, 0, 14, 1);
+  hud.restore();
+}
+
+function drawPlayHUD() {
+  if (game.camMode === 1 && plane.alive) drawCockpitFrame();
+  hud.fillStyle = 'rgba(8,6,16,0.34)';
+  hud.fillRect(0, H - 14, W, 14);
+
+  const camName = ['CHASE CAM', 'COCKPIT / FPV', 'CINEMA'][game.camMode];
+  drawTextSh('DUSK PATROL', 8, 6, COL.bone, 1, 0);
+  drawTextSh('PATROL 01  ' + camName + '  ' + (game.camMode + 1) + '/3', 8, 17, COL.dim, 1, 0);
+  drawTextC(fmtTime(game.timer), 240, 4, COL.amber, 2, 0);
+  drawTextR('SCORE ' + pad(game.score, 6), 472, 6, COL.bone, 1, 0);
+
+  drawTextSh('SPD ' + pad(plane.speed * 1.94, 3), 8, 258, COL.amber, 1, 0);
+  drawTextSh('ALT ' + pad(plane.pos[1], 4), 86, 258, COL.bone, 1, 0);
+  drawTextR('MSL ' + mslAmmo + '/8', 472, 258, COL.bone, 1, 0);
+
+  if (game.timer > 106 && game.camMode !== 1) {
+    hud.globalAlpha = clamp((game.timer - 106) / 4, 0, 1);
+    hud.fillStyle = 'rgba(8,6,16,0.45)';
+    hud.fillRect(42, 239, 396, 13);
+    drawTextC('WASD FLY  SHIFT BOOST  F MISSILE  C CAM  B ROLL', 240, 242, COL.bone, 1, 0);
+    hud.globalAlpha = 1;
+  }
+  if (plane.boost > 0.35) drawTextSh('AFTERBURNER', 8, 232, COL.amber, 1, 0);
+  if (Math.abs(plane.pitch) > 2.0) drawTextC('INVERTED', 240, 28, COL.amber, 1, 0);
+  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  P ' + Math.round(plane.pitch * DEG) + '  R ' + Math.round(plane.roll * DEG) + '  CH ' + game.visibleChunks + '/64', 8, 220, COL.dim, 1, 0);
+
+  drawReticle();
+  if (game.camMode === 1 && plane.alive) drawCockpitProjector();
+  drawTargetBox();
+  drawOffscreenArrow();
+
+  if (!plane.alive) {
+    drawTextC('CRASHED', 240, 108, COL.red, 2, 1);
+    drawTextC('RESPAWNING', 240, 140, COL.bone, 1, 1);
+  }
+  if (game.msgT > 0 && game.msg === 'CRASHED' && plane.alive) {
+    drawTextC('SIGNAL LOST', 240, 108, COL.red, 1, 1);
+  }
+  drawPops();
+}
+
+function renderHUD() {
+  hud.clearRect(0, 0, W, H);
+  if (game.state === 'title') drawTitleScreen();
+  else if (game.state === 'play') drawPlayHUD();
+  else if (game.state === 'pause') {
+    drawPlayHUD();
+    hud.fillStyle = 'rgba(6,4,12,0.62)';
+    hud.fillRect(0, 0, W, H);
+    drawTextC('PAUSED', 240, 78, COL.amber, 2, 1);
+    drawTextC('P TO RESUME', 240, 118, COL.bone, 1, 0);
+    drawTextC('R TO RESTART   M TO MUTE', 240, 134, COL.dim, 1, 0);
+    hud.fillStyle = 'rgba(255,180,92,0.3)';
+    hud.fillRect(112, 154, 256, 1);
+    drawTextC('WASD FLY   SHIFT BOOST   F MISSILE', 240, 170, COL.bone, 1, 0);
+    drawTextC('C / 1-3 VIEW   B BARREL ROLL', 240, 186, COL.bone, 1, 0);
+  } else if (game.state === 'results') {
+    hud.fillStyle = 'rgba(6,4,12,0.55)';
+    hud.fillRect(0, 0, W, H);
+    drawTextC('PATROL COMPLETE', 240, 62, COL.amber, 2, 1);
+    hud.fillStyle = 'rgba(255,180,92,0.4)';
+    hud.fillRect(150, 92, 180, 1);
+    drawTextC('SCORE  ' + pad(game.score, 6), 240, 104, COL.bone, 1, 0);
+    drawTextC('BEST   ' + pad(game.best, 6), 240, 118, COL.amber, 1, 0);
+    drawTextC('DRONES DOWN  ' + (drones.length - drones.filter(d => d.alive).length) + '/8', 240, 134, COL.dim, 1, 0);
+    if (game.newBest && game.score > 0) drawTextC('NEW BEST', 240, 148, COL.amber, 1, 0);
+    if (blinkOn(3.4)) drawTextC('PRESS ENTER TO FLY AGAIN', 240, 164, COL.bone, 1, 1);
+  }
+}
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let lastT = performance.now();
+function frame(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (!isFinite(dt) || dt < 0) dt = 0.016;
+  dt = Math.min(dt, 0.05);
+  game.fps = lerp(game.fps, 1 / Math.max(dt, 0.0001), 0.08);
+  update(dt);
+  renderScene();
+  renderHUD();
+  requestAnimationFrame(frame);
+}
+document.addEventListener('visibilitychange', () => { lastT = performance.now(); });
+
+resetDrones();
+updateTitlePlane();
+updateCamera(0.016);
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
