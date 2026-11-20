@@ -159,6 +159,14 @@ function boxInFrustum(min, max) {
   }
   return true;
 }
+// Conservative sphere test: the radius keeps partially visible quads from popping.
+function sphereInFrustum(x, y, z, r) {
+  for (let i = 0; i < 6; i++) {
+    const o = i * 4;
+    if (frustumPlanes[o] * x + frustumPlanes[o + 1] * y + frustumPlanes[o + 2] * z + frustumPlanes[o + 3] < -r) return false;
+  }
+  return true;
+}
 
 /* ---------- color ---------- */
 function rgb(hex) {
@@ -1900,6 +1908,8 @@ function drawClouds() {
   gl.bindVertexArray(cloudVao);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    // Billboard spans -1..1 * (sx,sy); the diagonal is a safe culling radius.
+    if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
     const p = [cx, c.y, c.z];
     const dir = vnorm(vsub(cam.pos, p));
     let right = vcross([0, 1, 0], dir);
@@ -1928,7 +1938,12 @@ function buildPoints() {
     pointData[o + 6] = size; pointData[o + 7] = phase;
     n++;
   };
-  for (let i = 0; i < streetLights.length; i++) put(streetLights[i], [1.0, 0.60, 0.26], 1.25, i * 0.37);
+  // Point primitives are clipped by their centre, so a 2-unit radius is already
+  // generous; off-screen lights never reach the GPU upload or the point shader.
+  for (let i = 0; i < streetLights.length; i++) {
+    const p = streetLights[i];
+    if (sphereInFrustum(p[0], p[1], p[2], 2)) put(p, [1.0, 0.60, 0.26], 1.25, i * 0.37);
+  }
   for (const d of drones) {
     if (!d.alive) continue;
     put([d.pos[0], d.pos[1] + 2.2, d.pos[2]], [1.0, 0.18, 0.12], -2.2, d.phase);
@@ -1973,6 +1988,8 @@ function fillParticles(list, batch, glowMode) {
     let a = glowMode ? Math.min(1, t * 1.5) : t * p.a;
     if (a <= 0.01) continue;
     const s = p.size;
+    // Billboard corners reach s*sqrt(2) from the centre; 1.5s is conservative.
+    if (!sphereInFrustum(p.p[0], p.p[1], p.p[2], s * 1.5)) continue;
     let o = n * 60;
     for (let k = 0; k < 6; k++) {
       d[o] = p.p[0]; d[o + 1] = p.p[1]; d[o + 2] = p.p[2];
@@ -2190,18 +2207,18 @@ function drawCockpitFrame() {
 
 function drawCockpitProjector() {
   const cx = 240, cy = 134;
-  hud.fillStyle = 'rgba(255,180,92,0.34)';
-  for (let i = 0; i < 48; i++) {
-    const a = i / 48 * TAU;
-    hud.fillRect(Math.round(cx + Math.cos(a) * 20), Math.round(cy + Math.sin(a) * 20), 1, 1);
+  hud.fillStyle = 'rgba(255,180,92,0.20)';
+  for (let i = 0; i < 24; i++) {
+    const a = i / 24 * TAU;
+    hud.fillRect(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 1, 1);
   }
   hud.save();
   hud.translate(cx, cy + clamp(plane.pitch * 70, -82, 82));
   hud.rotate(-plane.roll);
-  hud.fillStyle = 'rgba(242,230,208,0.42)';
-  hud.fillRect(-48, 0, 34, 1); hud.fillRect(14, 0, 34, 1);
-  hud.fillStyle = 'rgba(255,180,92,0.62)';
-  hud.fillRect(-7, 0, 14, 1);
+  hud.fillStyle = 'rgba(242,230,208,0.30)';
+  hud.fillRect(-42, 0, 28, 1); hud.fillRect(14, 0, 28, 1);
+  hud.fillStyle = 'rgba(255,180,92,0.45)';
+  hud.fillRect(-6, 0, 12, 1);
   hud.restore();
 }
 
@@ -2210,9 +2227,8 @@ function drawPlayHUD() {
   hud.fillStyle = 'rgba(8,6,16,0.34)';
   hud.fillRect(0, H - 14, W, 14);
 
-  const camName = ['CHASE CAM', 'COCKPIT / FPV', 'CINEMA'][game.camMode];
-  drawTextSh('DUSK PATROL', 8, 6, COL.bone, 1, 0);
-  drawTextSh('PATROL 01  ' + camName + '  ' + (game.camMode + 1) + '/3', 8, 17, COL.dim, 1, 0);
+  const camName = ['CHASE', 'FPV', 'CINEMA'][game.camMode];
+  drawTextSh('DUSK PATROL  ' + camName + ' ' + (game.camMode + 1) + '/3', 8, 6, COL.bone, 1, 0);
   drawTextC(fmtTime(game.timer), 240, 4, COL.amber, 2, 0);
   drawTextR('SCORE ' + pad(game.score, 6), 472, 6, COL.bone, 1, 0);
 
@@ -2224,7 +2240,7 @@ function drawPlayHUD() {
     hud.globalAlpha = clamp((game.timer - 106) / 4, 0, 1);
     hud.fillStyle = 'rgba(8,6,16,0.45)';
     hud.fillRect(42, 239, 396, 13);
-    drawTextC('WASD FLY  SHIFT BOOST  F MISSILE  C CAM  B ROLL', 240, 242, COL.bone, 1, 0);
+    drawTextC('WASD FLY   F MISSILE   SHIFT BOOST', 240, 242, COL.bone, 1, 0);
     hud.globalAlpha = 1;
   }
   if (plane.boost > 0.35) drawTextSh('AFTERBURNER', 8, 232, COL.amber, 1, 0);
