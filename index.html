@@ -7,7 +7,7 @@
 <meta name="description" content="WebGL2로 만든 480×270 픽셀 아트 전투기 게임. 360도 루프, 조종석 1인칭, 120초 드론 격추. 설치 없이 브라우저에서 바로 플레이.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="DUSK PATROL">
-<meta property="og:description" content="노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. 키보드만으로 즐기는 픽셀 아트 플라이트 액션.">
+<meta property="og:description" content="노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. PC는 키보드, 휴대폰은 터치로 즐기는 픽셀 아트 플라이트 액션.">
 <meta property="og:image" content="https://jeiel85.github.io/dusk-patrol/docs/cover.png">
 <meta property="og:image:width" content="960">
 <meta property="og:image:height" content="540">
@@ -96,6 +96,9 @@
     padding:4px 6px;color:var(--bone);background:rgba(242,230,208,.06);
   }
 
+  .hint-touch{display:none}
+  @media(pointer:coarse){.hint-keys{display:none}.hint-touch{display:inline}}
+
   footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--dim);font:500 12px/1.8 var(--mono)}
   .foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
   footer a{color:var(--amber);text-decoration:none}
@@ -118,7 +121,7 @@
     <div class="hero">
       <div class="kicker">Pixel patrol / web arcade</div>
       <h1>DUSK<br>PATROL</h1>
-      <p class="lead">노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. 키보드만으로 바로 플레이.</p>
+      <p class="lead">노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. PC는 키보드, 휴대폰은 터치로 바로 플레이.</p>
       <div class="actions">
         <a class="btn" href="#demo">게임 바로 플레이 <span aria-hidden="true">↓</span></a>
         <a class="btn ghost" href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">소스 코드 ↗</a>
@@ -142,7 +145,10 @@
       <div class="screen">
         <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
       </div>
-      <div class="demo-hint">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>W</kbd><kbd>S</kbd> 기수 · <kbd>A</kbd><kbd>D</kbd> 선회 · <kbd>F</kbd> 미사일 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 시점</div>
+      <div class="demo-hint">
+        <span class="hint-keys">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>W</kbd><kbd>S</kbd> 기수 · <kbd>A</kbd><kbd>D</kbd> 선회 · <kbd>F</kbd> 미사일 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 시점</span>
+        <span class="hint-touch">화면을 탭해 시작 · 왼쪽 절반을 드래그해 조종 · <kbd>FIRE</kbd> 미사일 · <kbd>BOOST</kbd> 가속 · 전체 화면이나 가로 화면이 편합니다</span>
+      </div>
     </div>
   </div>
 

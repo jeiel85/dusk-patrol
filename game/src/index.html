@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DUSK PATROL</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage"><div id="frame">
+  <canvas id="gl" width="480" height="270"></canvas>
+  <canvas id="hud" width="480" height="270"></canvas>
+</div></div>
+<div id="touch">
+  <div class="zone"></div>
+  <div class="base" hidden></div><div class="knob" hidden></div>
+  <div class="top">
+    <button type="button" data-act="cam" aria-label="카메라 전환">CAM</button>
+    <button type="button" data-act="pause" aria-label="일시정지">II</button>
+  </div>
+  <div class="pad">
+    <button type="button" data-act="roll" aria-label="배럴 롤">ROLL</button>
+    <button type="button" class="fire" data-act="fire" aria-label="미사일 발사">FIRE</button>
+    <button type="button" data-act="boost" aria-label="애프터버너">BOOST</button>
+  </div>
+</div>
+<div id="error"></div>
+<script src="core.js"></script>
+<script src="world.js"></script>
+<script src="gl.js"></script>
+<script src="shaders.js"></script>
+<script src="meshes.js"></script>
+<script src="font.js"></script>
+<script src="input.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
+<script src="render.js"></script>
+<script src="hud.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
