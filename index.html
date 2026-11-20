@@ -38,11 +38,6 @@
       #0b0812;
     clip-path:polygon(0 100%,0 62%,4% 62%,4% 45%,7% 45%,7% 71%,10% 71%,10% 34%,14% 34%,14% 55%,17% 55%,17% 22%,21% 22%,21% 49%,24% 49%,24% 64%,28% 64%,28% 39%,32% 39%,32% 15%,36% 15%,36% 52%,39% 52%,39% 30%,43% 30%,43% 58%,47% 58%,47% 26%,51% 26%,51% 47%,55% 47%,55% 68%,59% 68%,59% 37%,63% 37%,63% 19%,67% 19%,67% 54%,71% 54%,71% 41%,75% 41%,75% 63%,79% 63%,79% 28%,83% 28%,83% 50%,87% 50%,87% 36%,91% 36%,91% 59%,95% 59%,95% 44%,100% 44%,100% 100%);
   }
-  .skyline.back{
-    height:172px;opacity:.35;background:#2a1b34;
-    clip-path:polygon(0 100%,0 70%,6% 70%,6% 52%,11% 52%,11% 75%,16% 75%,16% 40%,22% 40%,22% 62%,29% 62%,29% 31%,35% 31%,35% 66%,42% 66%,42% 44%,48% 44%,48% 72%,55% 72%,55% 35%,61% 35%,61% 58%,68% 58%,68% 47%,74% 47%,74% 69%,81% 69%,81% 38%,88% 38%,88% 61%,94% 61%,94% 49%,100% 49%,100% 100%);
-  }
-
   .wrap{width:min(1080px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
   .kicker{font:700 11px/1 var(--mono);letter-spacing:.32em;text-transform:uppercase;color:var(--amber)}
   .hero{padding:64px 0 34px;max-width:720px}
@@ -72,18 +67,12 @@
     position:relative;border:1px solid rgba(255,180,92,.38);background:var(--panel);
     box-shadow:0 0 0 5px rgba(7,6,12,.9),0 26px 70px rgba(0,0,0,.55);
   }
-  .console::before,.console::after{content:"";position:absolute;width:18px;height:18px;z-index:3;pointer-events:none;border-color:var(--amber);border-style:solid}
-  .console::before{top:-2px;left:-2px;border-width:3px 0 0 3px}
-  .console::after{bottom:-2px;right:-2px;border-width:0 3px 3px 0}
   .console-bar{
     display:flex;align-items:center;gap:12px;padding:9px 14px;
     border-bottom:1px solid rgba(255,180,92,.22);
     background:linear-gradient(90deg,rgba(255,180,92,.1),transparent);
     font:700 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:#e9c9a8;
   }
-  .dots{display:flex;gap:5px}
-  .dots i{width:7px;height:7px;background:rgba(242,230,208,.35);display:block}
-  .dots i:first-child{background:var(--amber)}
   .console-bar .spacer{flex:1}
   .fs-btn{
     border:1px solid var(--line);background:transparent;color:var(--bone);
@@ -112,7 +101,7 @@
     .hero{padding:46px 0 28px}
     .console-bar .spacer{display:none}
     .sky{padding-bottom:78px}
-    .skyline{height:96px}.skyline.back{height:126px}
+    .skyline{height:96px}
   }
   @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
 </style>
@@ -120,7 +109,6 @@
 <body>
 
 <header class="sky">
-  <div class="skyline back"></div>
   <div class="skyline"></div>
   <div class="wrap">
     <div class="hero">
@@ -143,7 +131,6 @@
     </div>
     <div class="console" id="console">
       <div class="console-bar">
-        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>dusk_patrol — play in browser</span>
         <span class="spacer"></span>
         <span>WebGL2 · 480×270</span>
