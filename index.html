@@ -119,9 +119,6 @@
   .keyrow span{color:#cfc1b9;font-size:14px}
   .note{color:var(--dim);font:500 12px/1.6 var(--mono);margin:18px 0 0}
 
-  .tech{display:flex;flex-wrap:wrap;gap:10px;list-style:none;padding:0;margin:0}
-  .tech li{font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--line);padding:10px 12px;color:#c9b8ae}
-
   footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--dim);font:500 12px/1.8 var(--mono)}
   .foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
   footer a{color:var(--amber);text-decoration:none}
@@ -207,7 +204,6 @@
       <div class="intro">
         <div class="section-label">Controls</div>
         <h2>키보드만 잡으면 됩니다</h2>
-        <p>마우스는 선택 사항입니다. 클릭하면 포인터 락으로 마우스 조종도 가능합니다.</p>
       </div>
       <div class="keys">
         <div class="keyrow"><span class="keyset"><kbd>W</kbd><kbd>S</kbd></span><span>기수 올림 / 내림 · 루프</span></div>
@@ -221,21 +217,11 @@
     </div>
   </section>
 
-  <section class="body">
-    <div class="wrap">
-      <div class="intro">
-        <div class="section-label">Under the hood</div>
-        <h2>하나의 HTML 파일 안에서</h2>
-        <p>480×270 프레임버퍼에 그린 뒤 정수 배율로 키우고, Bayer 디더와 언샤프로 도트 질감을 살립니다. 소리까지 Web Audio로 합성합니다.</p>
-      </div>
-      <ul class="tech"><li>WebGL2</li><li>Ordered dithering</li><li>Frustum culling</li><li>Web Audio</li><li>No assets</li></ul>
-    </div>
-  </section>
 </main>
 
 <footer>
   <div class="wrap foot">
-    <span>DUSK PATROL · a pixel patrol over the coast</span>
+    <span>DUSK PATROL</span>
     <span><a href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">GitHub</a> · <a href="#demo">데모로 ↑</a></span>
   </div>
 </footer>

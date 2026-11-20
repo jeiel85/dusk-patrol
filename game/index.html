@@ -405,7 +405,8 @@ float noise(vec2 p){
   float a=h21(i), b=h21(i+vec2(1,0)), c=h21(i+vec2(0,1)), d=h21(i+vec2(1,1));
   return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
 }
-float fbm(vec2 p){ float a=0.0,w=0.5; for(int i=0;i<5;i++){ a+=noise(p)*w; p*=2.03; w*=0.5; } return a; }
+// Three octaves are enough at 480x270; finer detail vanishes in quantization anyway.
+float fbm(vec2 p){ float a=0.0,w=0.5; for(int i=0;i<3;i++){ a+=noise(p)*w; p*=2.03; w*=0.5; } return a; }
 
 void main(){
   vec2 p = vUV*2.0-1.0;
@@ -2228,7 +2229,7 @@ function drawPlayHUD() {
   hud.fillRect(0, H - 14, W, 14);
 
   const camName = ['CHASE', 'FPV', 'CINEMA'][game.camMode];
-  drawTextSh('DUSK PATROL  ' + camName + ' ' + (game.camMode + 1) + '/3', 8, 6, COL.bone, 1, 0);
+  drawTextSh('DP ' + camName + ' ' + (game.camMode + 1) + '/3', 8, 6, COL.dim, 1, 0);
   drawTextC(fmtTime(game.timer), 240, 4, COL.amber, 2, 0);
   drawTextR('SCORE ' + pad(game.score, 6), 472, 6, COL.bone, 1, 0);
 
@@ -2236,14 +2237,6 @@ function drawPlayHUD() {
   drawTextSh('ALT ' + pad(plane.pos[1], 4), 86, 258, COL.bone, 1, 0);
   drawTextR('MSL ' + mslAmmo + '/8', 472, 258, COL.bone, 1, 0);
 
-  if (game.timer > 106 && game.camMode !== 1) {
-    hud.globalAlpha = clamp((game.timer - 106) / 4, 0, 1);
-    hud.fillStyle = 'rgba(8,6,16,0.45)';
-    hud.fillRect(42, 239, 396, 13);
-    drawTextC('WASD FLY   F MISSILE   SHIFT BOOST', 240, 242, COL.bone, 1, 0);
-    hud.globalAlpha = 1;
-  }
-  if (plane.boost > 0.35) drawTextSh('AFTERBURNER', 8, 232, COL.amber, 1, 0);
   if (Math.abs(plane.pitch) > 2.0) drawTextC('INVERTED', 240, 28, COL.amber, 1, 0);
   if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  P ' + Math.round(plane.pitch * DEG) + '  R ' + Math.round(plane.roll * DEG) + '  CH ' + game.visibleChunks + '/64', 8, 220, COL.dim, 1, 0);
 
