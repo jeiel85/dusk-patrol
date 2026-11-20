@@ -103,16 +103,6 @@
     padding:4px 6px;color:var(--bone);background:rgba(242,230,208,.06);
   }
 
-  section.body{padding:52px 0;border-top:1px solid var(--line)}
-  .intro{margin-bottom:28px}
-  h2{font:800 clamp(24px,4vw,34px)/1.15 var(--mono);letter-spacing:-.03em;margin:12px 0 10px}
-  .intro p{color:var(--dim);margin:0;max-width:660px}
-  .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-  .card{background:linear-gradient(160deg,#191528,var(--panel));border:1px solid var(--line);padding:20px}
-  .card .tag{font:700 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--teal)}
-  .card h3{font:800 17px/1.2 var(--mono);margin:10px 0 8px}
-  .card p{margin:0;color:var(--dim);font-size:14px}
-
   footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--dim);font:500 12px/1.8 var(--mono)}
   .foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
   footer a{color:var(--amber);text-decoration:none}
@@ -120,7 +110,6 @@
 
   @media(max-width:760px){
     .hero{padding:46px 0 28px}
-    .cards{grid-template-columns:1fr}
     .console-bar .spacer{display:none}
     .sky{padding-bottom:78px}
     .skyline{height:96px}.skyline.back{height:126px}
@@ -165,33 +154,6 @@
       <div class="demo-hint">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>W</kbd><kbd>S</kbd> 기수 · <kbd>A</kbd><kbd>D</kbd> 선회 · <kbd>F</kbd> 미사일 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 시점</div>
     </div>
   </div>
-
-  <section class="body">
-    <div class="wrap">
-      <div class="intro">
-        <div class="section-label">The mission</div>
-        <h2>짧고 선명한 비행 한 판</h2>
-        <p>루프를 돌고 시점을 바꾸며 드론을 격추하세요. 최고 기록은 브라우저에 남습니다.</p>
-      </div>
-      <div class="cards">
-        <article class="card">
-          <div class="tag">Flight</div>
-          <h3>360도 루프</h3>
-          <p>기수를 계속 당기면 그대로 뒤집힙니다. 롤도 360도까지 감기고 손을 놓으면 수평을 찾습니다.</p>
-        </article>
-        <article class="card">
-          <div class="tag">Camera</div>
-          <h3>시점 3종</h3>
-          <p><kbd>1</kbd> 추적 · <kbd>2</kbd> 조종석 · <kbd>3</kbd> 시네마. 조종석에는 인공 수평선이 표시됩니다.</p>
-        </article>
-        <article class="card">
-          <div class="tag">Score</div>
-          <h3>120초 스코어 어택</h3>
-          <p>미사일 8발로 시작하고 화면 밖 표적은 가장자리 화살표로 알려줍니다. 탄약은 자동 보급됩니다.</p>
-        </article>
-      </div>
-    </div>
-  </section>
 
 </main>
 
