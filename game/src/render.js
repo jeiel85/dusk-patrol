@@ -5,7 +5,7 @@
 'use strict';
 
 const IDENT = m4id(m4());
-const droneM = m4(), jetM = m4(), cloudM = m4();
+const eM = m4(), jetM = m4(), cloudM = m4();
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
 const camRight = [1, 0, 0], camUp = [0, 1, 0];
 
@@ -85,7 +85,9 @@ function drawCity() {
 function drawJet() {
   const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
   beginSolid();
-  gl.uniform3fv(U(solidProg, 'uAmbient'), JET_AMB);
+  // Blink the hull while respawn invulnerability is running.
+  const inv = plane.invuln > 0 && (Math.sin(game.time * 26) > 0);
+  gl.uniform3fv(U(solidProg, 'uAmbient'), inv ? [0.75, 0.95, 1.0] : JET_AMB);
   gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
   gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
@@ -108,16 +110,37 @@ function drawJet() {
   gl.disable(gl.BLEND);
 }
 
-function drawDrones() {
+function drawEnemies() {
   beginSolid();
-  gl.bindVertexArray(droneMesh.vao);
-  for (const d of drones) {
-    if (!d.alive) continue;
-    m4rotY(droneM, d.rot);
-    droneM[12] = d.pos[0]; droneM[13] = d.pos[1]; droneM[14] = d.pos[2];
-    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, droneM);
-    gl.drawArrays(gl.TRIANGLES, 0, droneMesh.count);
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const mesh = enemyMesh(e.type);
+    const flash = e.hitT > 0;
+    gl.uniform3fv(U(solidProg, 'uAmbient'), flash ? [1.0, 0.95, 0.85] : SOLID_AMB);
+    gl.uniform3fv(U(solidProg, 'uSunColor'), flash ? [1.0, 1.0, 1.0] : SOLID_SUN);
+    if (e.spawnT > 0) {
+      const s = 1 - e.spawnT / 0.55;
+      m4rotY(eM, e.rot);
+      const sc = 0.35 + 0.65 * s;
+      eM[0] *= sc; eM[1] *= sc; eM[2] *= sc;
+      eM[4] *= sc; eM[5] *= sc; eM[6] *= sc;
+      eM[8] *= sc; eM[9] *= sc; eM[10] *= sc;
+    } else {
+      m4rotY(eM, e.rot);
+      if (e.roll) {
+        const c = Math.cos(e.roll), s = Math.sin(e.roll);
+        const a = eM[0], b = eM[1], cc = eM[2];
+        eM[0] = a * c + eM[4] * s; eM[1] = b * c + eM[5] * s; eM[2] = cc * c + eM[6] * s;
+        eM[4] = eM[4] * c - a * s; eM[5] = eM[5] * c - b * s; eM[6] = eM[6] * c - cc * s;
+      }
+    }
+    eM[12] = e.pos[0]; eM[13] = e.pos[1]; eM[14] = e.pos[2];
+    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, eM);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
   }
+  gl.uniform3fv(U(solidProg, 'uAmbient'), SOLID_AMB);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), SOLID_SUN);
 }
 
 function drawClouds() {
@@ -127,16 +150,13 @@ function drawClouds() {
   gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
   gl.uniform1i(U(cloudProg, 'uTex'), 0);
-  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]); // same for every cloud
+  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
   const tint = new Float32Array(3);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
-    // Billboard spans -1..1 * (sx,sy); the diagonal is a safe culling radius.
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
-    // Billboard right = normalize(cross(worldUp, normalize(cam.pos - p))).
-    // cross with up kills the y component, so only x/z need to be normalized.
     const dx = cam.pos[0] - cx, dy = cam.pos[1] - c.y, dz = cam.pos[2] - c.z;
     const dl = Math.hypot(dx, dy, dz) || 1;
     let rx = dz / dl, rz = -dx / dl;
@@ -155,6 +175,7 @@ function drawClouds() {
 }
 
 const PT_LIGHT = [1.0, 0.60, 0.26], PT_DRONE = [1.0, 0.18, 0.12], PT_MISSILE = [1.0, 0.86, 0.55];
+const PT_ENEMY = [1.0, 0.24, 0.20], PT_BULLET = [1.0, 0.45, 0.22];
 const PT_LEFT = [1.0, 0.18, 0.18], PT_RIGHT = [0.35, 1.0, 0.55];
 const ptScratch = [0, 0, 0], ptLeft = [0, 0, 0], ptRight = [0, 0, 0];
 function buildPoints() {
@@ -167,18 +188,17 @@ function buildPoints() {
     pointData[o + 6] = size; pointData[o + 7] = phase;
     n++;
   };
-  // Point primitives are clipped by their centre, so a 2-unit radius is already
-  // generous; off-screen lights never reach the GPU upload or the point shader.
   for (let i = 0; i < streetLights.length; i++) {
     const p = streetLights[i];
     if (sphereInFrustum(p[0], p[1], p[2], 2)) put(p, PT_LIGHT, 1.25, i * 0.37);
   }
-  for (const d of drones) {
-    if (!d.alive) continue;
-    ptScratch[0] = d.pos[0]; ptScratch[1] = d.pos[1] + 2.2; ptScratch[2] = d.pos[2];
-    put(ptScratch, PT_DRONE, -2.2, d.phase);
+  for (const e of enemies) {
+    if (!e.alive || e.spawnT > 0) continue;
+    ptScratch[0] = e.pos[0]; ptScratch[1] = e.pos[1] + e.r * 0.5; ptScratch[2] = e.pos[2];
+    put(ptScratch, PT_ENEMY, -2.4, e.phase);
   }
   for (const m of missiles) put(m.p, PT_MISSILE, 1.9, game.time);
+  for (const b of ebullets) put(b.p, PT_BULLET, b.kind ? -1.6 : 1.3, game.time);
   const showJet = game.state !== 'title' ? (game.camMode !== 1 && plane.alive) : plane.alive;
   if (showJet) {
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
@@ -210,6 +230,28 @@ function drawPoints(n) {
   gl.disable(gl.BLEND);
 }
 
+/* ---------- cannon tracers ---------- */
+function drawTracers() {
+  const n = Math.min(tracers.length, TRACER_MAX);
+  if (n <= 0) return;
+  for (let i = 0; i < n; i++) {
+    const t = tracers[tracers.length - 1 - i], o = i * 6;
+    tracerData[o] = t.a[0]; tracerData[o + 1] = t.a[1]; tracerData[o + 2] = t.a[2];
+    tracerData[o + 3] = t.b[0]; tracerData[o + 4] = t.b[1]; tracerData[o + 5] = t.b[2];
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, tracerVbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, tracerData.subarray(0, n * 6));
+  gl.useProgram(tracerProg);
+  gl.uniformMatrix4fv(U(tracerProg, 'uVP'), false, vpM);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.bindVertexArray(tracerVao);
+  gl.drawArrays(gl.LINES, 0, n * 2);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 function fillParticles(list, batch, glowMode) {
   const d = batch.data;
   let n = 0;
@@ -219,7 +261,6 @@ function fillParticles(list, batch, glowMode) {
     let a = glowMode ? Math.min(1, t * 1.5) : t * p.a;
     if (a <= 0.01) continue;
     const s = p.size;
-    // Billboard corners reach s*sqrt(2) from the centre; 1.5s is conservative.
     if (!sphereInFrustum(p.p[0], p.p[1], p.p[2], s * 1.5)) continue;
     let o = n * 60;
     for (let k = 0; k < 6; k++) {
@@ -287,11 +328,12 @@ function renderScene() {
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
-  drawDrones();
+  drawEnemies();
   drawClouds();
 
   const pn = buildPoints();
   drawPoints(pn);
+  drawTracers();
   const sc = fillParticles(smokeP, smokeBatch, false);
   drawParticleBatch(smokeBatch, sc, smokeTex, false);
   const gc = fillParticles(glowP, glowBatch, true);
@@ -305,6 +347,7 @@ function renderScene() {
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, sceneTex);
   gl.uniform1i(U(postProg, 'uScene'), 0);
+  gl.uniform1f(U(postProg, 'uHurt'), clamp(game.hitFlash * 0.55 + (plane.alive ? 0 : 0.35), 0, 1));
   gl.bindVertexArray(fsVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }

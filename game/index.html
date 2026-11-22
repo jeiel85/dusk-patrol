@@ -23,13 +23,24 @@ body.touch #touch{display:block}
 #touch .base,#touch .knob{position:absolute;border-radius:50%;pointer-events:none;transform:translate(-50%,-50%)}
 #touch .base{width:calc(var(--b)*1.7);height:calc(var(--b)*1.7);border:2px solid rgba(242,230,208,.32);background:rgba(8,6,16,.22)}
 #touch .knob{width:calc(var(--b)*.75);height:calc(var(--b)*.75);background:rgba(255,180,92,.55);border:2px solid rgba(255,180,92,.9)}
-#touch .pad{position:absolute;right:max(3vmin,env(safe-area-inset-right));bottom:max(9vh,env(safe-area-inset-bottom));display:grid;
-  grid-template-columns:repeat(2,var(--b));gap:calc(var(--b)*.22);align-items:end}
+/* Right-hand pad: four ability buttons in a 2x2 cluster, with a wide FIRE
+   bar underneath as the primary thumb target. Grid areas keep the order
+   deliberate instead of relying on auto-placement. */
+#touch .pad{position:absolute;right:max(3vmin,env(safe-area-inset-right));bottom:max(3vh,env(safe-area-inset-bottom));
+  display:grid;grid-template-columns:repeat(2,var(--b));
+  grid-template-areas:"flr msl" "roll boost" "fire fire";
+  gap:calc(var(--b)*.2);align-items:center}
 #touch .top{position:absolute;right:max(3vmin,env(safe-area-inset-right));top:max(12vh,env(safe-area-inset-top));display:flex;gap:calc(var(--b)*.18)}
 #touch button{pointer-events:auto;touch-action:none;width:var(--b);height:var(--b);border-radius:50%;padding:0;
   border:2px solid rgba(255,180,92,.75);background:rgba(8,6,16,.35);color:#f2e6d0;font:inherit;letter-spacing:inherit}
 #touch button.on{background:rgba(255,180,92,.55);color:#1a0f14}
-#touch button.fire{grid-column:2;grid-row:1/3;width:calc(var(--b)*1.25);height:calc(var(--b)*1.25);border-color:rgba(255,90,95,.9)}
+#touch button[data-act="flare"]{grid-area:flr}
+#touch button[data-act="msl"]{grid-area:msl}
+#touch button[data-act="roll"]{grid-area:roll}
+#touch button[data-act="boost"]{grid-area:boost}
+#touch button.fire{grid-area:fire;width:100%;height:calc(var(--b)*.7);border-radius:calc(var(--b)*.35);
+  border-color:rgba(255,90,95,.9);background:rgba(60,10,18,.4)}
+#touch button.fire.on{background:rgba(255,90,95,.6);color:#1a0f14}
 #touch .top button{width:calc(var(--b)*.72);height:calc(var(--b)*.72)}
 body:not(.flying) #touch .pad,body:not(.flying) #touch .top,body:not(.flying) #touch .zone{display:none}
 </style>
@@ -47,8 +58,10 @@ body:not(.flying) #touch .pad,body:not(.flying) #touch .top,body:not(.flying) #t
     <button type="button" data-act="pause" aria-label="일시정지">II</button>
   </div>
   <div class="pad">
+    <button type="button" data-act="flare" aria-label="플레어">FLR</button>
     <button type="button" data-act="roll" aria-label="배럴 롤">ROLL</button>
-    <button type="button" class="fire" data-act="fire" aria-label="미사일 발사">FIRE</button>
+    <button type="button" class="fire" data-act="fire" aria-label="기관포">FIRE</button>
+    <button type="button" data-act="msl" aria-label="미사일">MSL</button>
     <button type="button" data-act="boost" aria-label="애프터버너">BOOST</button>
   </div>
 </div>
@@ -328,13 +341,15 @@ function droneHome(i) {
   return [x, 110 + r() * 150, z];
 }
 
+// Height texture encoding shared with the water shader: tex = (h + BIAS) / RANGE.
+const HGT_BIAS = 60, HGT_RANGE = 720;
 function buildHeightData(size) {
   const data = new Uint8Array(size * size);
   for (let j = 0; j < size; j++) {
     const z = -HALF + (j + 0.5) / size * WORLD;
     for (let i = 0; i < size; i++) {
       const x = -HALF + (i + 0.5) / size * WORLD;
-      data[j * size + i] = clamp(terrainHeight(x, z) / 600, 0, 1) * 255;
+      data[j * size + i] = clamp((terrainHeight(x, z) + HGT_BIAS) / HGT_RANGE, 0, 1) * 255;
     }
   }
   return data;
@@ -521,8 +536,10 @@ uniform float uTime;
 void main(){
   vec2 uv = vW.xz/6000.0+0.5;
   float inside = step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0);
-  float h = texture(uHeight, clamp(uv,0.001,0.999)).r*600.0*inside;
-  float depth = max(h, 0.0);
+  // Terrain height, decoded from the biased 8-bit texture: -60 .. +660.
+  // Outside the map there is open ocean, so treat it as deep water.
+  float h = (texture(uHeight, clamp(uv,0.001,0.999)).r*720.0-60.0);
+  float depth = inside > 0.5 ? max(-h, 0.0) : 60.0;
 
   vec3 deep = vec3(0.010,0.105,0.20);
   vec3 shallow = vec3(0.14,0.50,0.52);
@@ -753,6 +770,7 @@ precision highp float;
 in vec2 vUV;
 out vec4 outColor;
 uniform sampler2D uScene;
+uniform float uHurt;
 float bayer2(vec2 a){ a=floor(a); return fract(a.x*0.5 + a.y*a.y*0.75); }
 float bayer4(vec2 a){ return bayer2(0.5*a)*0.25 + bayer2(a); }
 float bayer8(vec2 a){ return bayer4(0.5*a)*0.25 + bayer2(a); }
@@ -766,10 +784,25 @@ void main(){
   c *= vec3(1.05,1.0,0.97);
   vec2 d = vUV-0.5;
   c *= 1.0 - 0.30*pow(length(d)*1.45, 2.2);
+  // Damage flash: red edge burn that leaves the centre readable.
+  float edge = smoothstep(0.16, 0.62, length(d));
+  c = mix(c, vec3(0.62,0.05,0.07), uHurt * edge * 0.85);
+  c = mix(c, vec3(0.9,0.2,0.2), uHurt * 0.10);
   float bay = (bayer8(gl_FragCoord.xy) - 0.5) * 0.55;
   c = floor(c*10.0 + 0.5 + bay)/10.0;
   outColor = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
+
+// Cannon tracers: thin additive lines, faded at the muzzle end.
+const TRACER_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+uniform mat4 uVP;
+void main(){ gl_Position = uVP*vec4(aPos,1.0); }`;
+
+const TRACER_FS = `#version 300 es
+precision highp float;
+out vec4 outColor;
+void main(){ outColor = vec4(1.0, 0.82, 0.42, 0.9); }`;
 
 const skyProg = makeProg(FS_VS, SKY_FS, 'sky');
 const waterProg = makeProg(WATER_VS, WATER_FS, 'water');
@@ -780,6 +813,7 @@ const pointProg = makeProg(POINT_VS, POINT_FS, 'point');
 const partProg = makeProg(PART_VS, PART_FS, 'part');
 const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
 const postProg = makeProg(FS_VS, POST_FS, 'post');
+const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
 const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
 const FOG_COL = [0.80, 0.52, 0.44];
 const FOG_DENS = 0.00026;
@@ -1166,57 +1200,247 @@ const smokeBatch = makeParticleVAO(240);
 const glowBatch = makeParticleVAO(260);
 </script>
 <script>
+/* DUSK PATROL — meshes2.js
+   Extra GPU geometry for the wave campaign: interceptor, gunship, carrier,
+   and the dynamic tracer buffer. Loaded after meshes.js. */
+'use strict';
+
+/* ---------- interceptor: dart-shaped fighter ---------- */
+const INTC_HULL = rgb('#7a86ad'), INTC_DARK = rgb('#39415e'), INTC_GLOW = rgb('#ff4a3c');
+const intc = new MeshBuilder();
+(function buildInterceptor() {
+  const nose = [0, 0.1, -6.4];
+  const body = [[-0.85, 0.35, 1.2], [0.85, 0.35, 1.2], [0.85, -0.35, 1.2], [-0.85, -0.35, 1.2]];
+  // Four tapered sides from the nose to the body box.
+  for (let i = 0; i < 4; i++) {
+    const a = body[i], b = body[(i + 1) % 4];
+    intc.tri(nose, a, b, i === 3 ? INTC_DARK : INTC_HULL, [(a[0] + b[0]) / 2, 0.1, 0]);
+  }
+  intc.quad(body[0], body[1], body[2], body[3], INTC_DARK, [0, 0, 1]);
+  // Swept wings, both sides, with a red leading edge.
+  for (const s of [-1, 1]) {
+    const poly = [[0.7 * s, 0.05, -0.6], [0.7 * s, 0.05, 1.9], [3.6 * s, 0.05, 2.6], [4.4 * s, 0.05, 2.2], [1.5 * s, 0.05, -1.5]];
+    for (let i = 1; i < poly.length - 1; i++) {
+      intc.tri(poly[0], poly[i], poly[i + 1], INTC_HULL, [0, 1, 0]);
+      intc.tri(
+        [poly[0][0], -0.14, poly[0][2]], [poly[i + 1][0], -0.14, poly[i + 1][2]], [poly[i][0], -0.14, poly[i][2]],
+        INTC_DARK, [0, -1, 0]);
+    }
+    intc.quad([1.5 * s, 0.06, -1.5], [4.4 * s, 0.06, 2.2], [4.4 * s, 0.06, 2.55], [1.5 * s, 0.06, -1.15], INTC_GLOW, [0, 1, 0]);
+    // Tail fin.
+    intc.quad([0.6 * s, 0.3, 0.4], [0.6 * s, 1.55, 1.6], [0.6 * s, 1.55, 2.1], [0.6 * s, 0.3, 1.6], INTC_DARK, [s, 0.2, 0]);
+  }
+  // Engine glow block.
+  intc.quad([-0.6, 0.25, 1.25], [0.6, 0.25, 1.25], [0.6, -0.25, 1.25], [-0.6, -0.25, 1.25], INTC_GLOW, [0, 0, 1]);
+})();
+const intcMesh = intc.build();
+
+/* ---------- gunship: heavy block with side pods ---------- */
+const GUN_HULL = rgb('#5d6355'), GUN_DARK = rgb('#33372f'), GUN_TRIM = rgb('#c9a253');
+const gun = new MeshBuilder();
+(function buildGunship() {
+  // Main hull box.
+  const x0 = -3.2, x1 = 3.2, y0 = -1.1, y1 = 1.3, z0 = -4.2, z1 = 4.6;
+  const V = (x, y, z) => [x, y, z];
+  const box = [
+    [V(x0, y1, z0), V(x1, y1, z0), V(x1, y1, z1), V(x0, y1, z1), [0, 1, 0], GUN_HULL],
+    [V(x0, y0, z1), V(x1, y0, z1), V(x1, y0, z0), V(x0, y0, z0), [0, -1, 0], GUN_DARK],
+    [V(x1, y0, z0), V(x1, y0, z1), V(x1, y1, z1), V(x1, y1, z0), [1, 0, 0], GUN_HULL],
+    [V(x0, y0, z1), V(x0, y0, z0), V(x0, y1, z0), V(x0, y1, z1), [-1, 0, 0], GUN_HULL],
+    [V(x0, y0, z0), V(x1, y0, z0), V(x1, y1, z0), V(x0, y1, z0), [0, 0, -1], GUN_TRIM],
+    [V(x1, y0, z1), V(x0, y0, z1), V(x0, y1, z1), V(x1, y1, z1), [0, 0, 1], GUN_DARK]
+  ];
+  for (const f of box) gun.quad(f[0], f[1], f[2], f[3], f[5], f[4]);
+  // Side weapon pods.
+  for (const s of [-1, 1]) {
+    const px = 3.2 * s;
+    gun.quad([px, 0.9, -1.6], [px + 1.5 * s, 0.9, -0.9], [px + 1.5 * s, -0.9, -0.9], [px, -0.9, -1.6], GUN_DARK, [s, 0, 0]);
+    gun.quad([px + 1.5 * s, 0.55, -0.9], [px + 1.5 * s, 0.55, 2.4], [px + 1.5 * s, -0.55, 2.4], [px + 1.5 * s, -0.55, -0.9], GUN_TRIM, [s, 0, 0]);
+    gun.quad([px + 1.5 * s, 0.55, 2.4], [px, 0.9, 2.9], [px, -0.9, 2.9], [px + 1.5 * s, -0.55, 2.4], GUN_DARK, [0, 0, 1]);
+  }
+  // Rotor ring on top.
+  for (let i = 0; i < 8; i++) {
+    const a0 = i / 8 * TAU, a1 = (i + 1) / 8 * TAU;
+    gun.tri([0, 2.4, 0], [Math.cos(a0) * 3.4, 1.35, Math.sin(a0) * 3.4], [Math.cos(a1) * 3.4, 1.35, Math.sin(a1) * 3.4], GUN_DARK, [0, 1, 0]);
+  }
+})();
+const gunMesh = gun.build();
+
+/* ---------- carrier: boss hull ---------- */
+const CAR_HULL = rgb('#5a4f68'), CAR_DARK = rgb('#2a2436'), CAR_TRIM = rgb('#e0603f'), CAR_LIGHT = rgb('#8a7c9c');
+const car = new MeshBuilder();
+(function buildCarrier() {
+  const x0 = -8, x1 = 8, y0 = -3, y1 = 3, z0 = -20, z1 = 16;
+  const V = (x, y, z) => [x, y, z];
+  const box = [
+    [V(x0, y1, z0), V(x1, y1, z0), V(x1, y1, z1), V(x0, y1, z1), [0, 1, 0], CAR_LIGHT],
+    [V(x0, y0, z1), V(x1, y0, z1), V(x1, y0, z0), V(x0, y0, z0), [0, -1, 0], CAR_DARK],
+    [V(x1, y0, z0), V(x1, y0, z1), V(x1, y1, z1), V(x1, y1, z0), [1, 0, 0], CAR_HULL],
+    [V(x0, y0, z1), V(x0, y0, z0), V(x0, y1, z0), V(x0, y1, z1), [-1, 0, 0], CAR_HULL],
+    [V(x0, y0, z0), V(x1, y0, z0), V(x1, y1, z0), V(x0, y1, z0), [0, 0, -1], CAR_TRIM],
+    [V(x1, y0, z1), V(x0, y0, z1), V(x0, y1, z1), V(x1, y1, z1), [0, 0, 1], CAR_DARK]
+  ];
+  for (const f of box) car.quad(f[0], f[1], f[2], f[3], f[5], f[4]);
+  // Bow wedge.
+  car.quad(V(x0, y1, z0), V(x1, y1, z0), V(0, y1 - 1.2, z0 - 7), V(0, y1 - 1.2, z0 - 7), CAR_TRIM, [0, 1, 0]);
+  for (const s of [-1, 1]) {
+    // Flight deck wings.
+    car.quad([8 * s, 1.4, -9], [22 * s, 1.4, 3], [22 * s, 1.4, 8], [8 * s, 1.4, 12], CAR_HULL, [0, 1, 0]);
+    car.quad([8 * s, -1.2, 12], [22 * s, -1.2, 8], [22 * s, -1.2, 3], [8 * s, -1.2, -9], CAR_DARK, [0, -1, 0]);
+    // Engine nacelles.
+    for (const zz of [-2, 6]) {
+      const ex = 13 * s;
+      car.quad([ex - 2, 1.0, zz - 4], [ex + 2, 1.0, zz - 4], [ex + 2, 1.0, zz + 4], [ex - 2, 1.0, zz + 4], CAR_LIGHT, [0, 1, 0]);
+      car.quad([ex - 2, -1.4, zz + 4], [ex + 2, -1.4, zz + 4], [ex + 2, -1.4, zz - 4], [ex - 2, -1.4, zz - 4], CAR_DARK, [0, -1, 0]);
+      car.quad([ex - 2, 1.0, zz + 4], [ex + 2, 1.0, zz + 4], [ex + 2, -1.4, zz + 4], [ex - 2, -1.4, zz + 4], CAR_TRIM, [0, 0, 1]);
+    }
+    // Spine towers.
+    car.quad([3 * s, 3.0, -12], [5 * s, 3.0, -12], [5 * s, 6.2, -8], [3 * s, 6.2, -8], CAR_LIGHT, [s, 0.4, 0]);
+  }
+  // Underside glow strip.
+  car.quad([-3, -3.05, -16], [3, -3.05, -16], [3, -3.05, 12], [-3, -3.05, 12], CAR_TRIM, [0, -1, 0]);
+})();
+const carMesh = car.build();
+
+/* ---------- tracers: dynamic line buffer ---------- */
+const TRACER_MAX = 96;
+const tracerData = new Float32Array(TRACER_MAX * 6);
+const tracerVbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, tracerVbo);
+gl.bufferData(gl.ARRAY_BUFFER, tracerData.byteLength, gl.DYNAMIC_DRAW);
+const tracerVao = gl.createVertexArray();
+gl.bindVertexArray(tracerVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, tracerVbo);
+attr(0, 3);
+gl.bindVertexArray(null);
+
+/* ---------- pick the mesh for an enemy type ---------- */
+function enemyMesh(type) {
+  if (type === 'interceptor') return intcMesh;
+  if (type === 'gunship') return gunMesh;
+  if (type === 'carrier') return carMesh;
+  return droneMesh;
+}
+</script>
+<script>
 /* DUSK PATROL — font.js
-   1-bit pixel font baked at run time and the HUD text helpers.
+   A hand-drawn 5x7 bitmap font baked into per-colour atlases at run time,
+   plus the HUD text helpers. No canvas font is involved, so every glyph
+   stays crisp at integer scales and never smears at small sizes.
    Loaded as a classic script in order (see index.html); globals are shared. */
 'use strict';
 
-const CHARSET = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?/+-%()[]<>';
 const COL = { bone: '#f2e6d0', amber: '#ffb45c', red: '#ff5a5f', dim: '#8f84a2', dark: '#1a1524', white: '#ffffff' };
+
+const GLYPH_W = 5, GLYPH_H = 7, GLYPH_ADV = 6;
+
+const GLYPHS = {
+  ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
+  A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+  C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+  E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+  G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
+  H: ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  I: ['.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  J: ['..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
+  K: ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+  L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+  N: ['#...#', '##..#', '#.#.#', '#.#.#', '#..##', '#...#', '#...#'],
+  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+  Q: ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+  R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+  S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  V: ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+  W: ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '##.##', '#...#'],
+  X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+  Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+  Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  0: ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+  1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  3: ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
+  4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+  6: ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+  7: ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+  8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  9: ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+  '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
+  ',': ['.....', '.....', '.....', '.....', '.##..', '.##..', '.#...'],
+  ':': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.....'],
+  ';': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.#...'],
+  '!': ['..#..', '..#..', '..#..', '..#..', '..#..', '.....', '..#..'],
+  '?': ['.###.', '#...#', '....#', '...#.', '..#..', '.....', '..#..'],
+  '/': ['....#', '...#.', '...#.', '..#..', '.#...', '.#...', '#....'],
+  '+': ['.....', '..#..', '..#..', '#####', '..#..', '..#..', '.....'],
+  '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
+  '=': ['.....', '.....', '#####', '.....', '#####', '.....', '.....'],
+  '%': ['##..#', '##..#', '...#.', '..#..', '.#...', '#..##', '#..##'],
+  '(': ['...#.', '..#..', '.#...', '.#...', '.#...', '..#..', '...#.'],
+  ')': ['.#...', '..#..', '...#.', '...#.', '...#.', '..#..', '.#...'],
+  '[': ['.###.', '.#...', '.#...', '.#...', '.#...', '.#...', '.###.'],
+  ']': ['.###.', '...#.', '...#.', '...#.', '...#.', '...#.', '.###.'],
+  '<': ['...#.', '..#..', '.#...', '#....', '.#...', '..#..', '...#.'],
+  '>': ['.#...', '..#..', '...#.', '....#', '...#.', '..#..', '.#...'],
+  '*': ['.....', '#.#.#', '.###.', '#####', '.###.', '#.#.#', '.....'],
+  '\u00b7': ['.....', '.....', '.....', '..#..', '.....', '.....', '.....']
+};
+
+const CHARSET = Object.keys(GLYPHS);
 const ATLAS = {};
+
+// Bake every glyph into one strip for a given colour. 1px padding between
+// glyphs keeps nearest-neighbour scaling from bleeding neighbours together.
 function buildAtlas(color) {
-  const SH = 12;
-  const c = document.createElement('canvas');
-  c.width = 760; c.height = SH;
-  const x = c.getContext('2d');
-  x.font = 'bold 10px "Courier New", monospace';
-  x.textBaseline = 'top';
-  x.fillStyle = '#fff';
-  let px = 1;
+  const pad = 1;
+  let x = 0;
   const map = {};
+  for (const ch of CHARSET) { map[ch] = { x, w: GLYPH_W }; x += GLYPH_W + pad; }
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, x); c.height = GLYPH_H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = color;
   for (const ch of CHARSET) {
-    const w = Math.max(1, Math.ceil(x.measureText(ch).width));
-    x.fillText(ch, px, 0);
-    map[ch] = { x: px, w };
-    px += w + 1;
+    const g = GLYPHS[ch], ox = map[ch].x;
+    for (let row = 0; row < GLYPH_H; row++) {
+      const line = g[row];
+      for (let col = 0; col < GLYPH_W; col++) {
+        if (line[col] === '#') ctx.fillRect(ox + col, row, 1, 1);
+      }
+    }
   }
-  const img = x.getImageData(0, 0, c.width, SH), d = img.data;
-  const col = rgb(color);
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i + 3] > 64) {
-      d[i] = col[0] * 255; d[i + 1] = col[1] * 255; d[i + 2] = col[2] * 255; d[i + 3] = 255;
-    } else d[i + 3] = 0;
-  }
-  x.putImageData(img, 0, 0);
-  return { c, map, h: SH };
+  return { c, map, h: GLYPH_H, adv: GLYPH_ADV };
 }
 function atlas(color) { if (!ATLAS[color]) ATLAS[color] = buildAtlas(color); return ATLAS[color]; }
+
 function textWidth(str, scale, spacing) {
   const a = atlas(COL.bone);
+  scale = scale || 1; spacing = spacing || 0;
+  const chars = (str + '').toUpperCase();
+  if (!chars.length) return 0;
   let w = 0;
-  for (const ch of (str + '').toUpperCase()) { const m = a.map[ch] || a.map[' ']; w += (m.w + (spacing || 0)) * (scale || 1); }
-  return w;
+  for (const ch of chars) w += (a.adv + spacing) * scale;
+  return w - (spacing ? 0 : scale); // trailing gap is not part of the drawn width
 }
+
 function drawText(str, x, y, color, scale, spacing) {
   const a = atlas(color);
   scale = scale || 1; spacing = spacing || 0;
-  str = (str + '').toUpperCase();
+  const chars = (str + '').toUpperCase();
   let px = x | 0;
   const py = y | 0;
-  for (const ch of str) {
+  const step = (a.adv + spacing) * scale;
+  for (const ch of chars) {
     const m = a.map[ch] || a.map[' '];
     hud.drawImage(a.c, m.x, 0, m.w, a.h, px, py, m.w * scale, a.h * scale);
-    px += (m.w + spacing) * scale;
+    px += step;
   }
   return px;
 }
@@ -1231,6 +1455,671 @@ function drawTextC(str, cx, y, color, scale, spacing) {
 function drawTextR(str, rx, y, color, scale, spacing) {
   const w = textWidth(str, scale, spacing);
   drawTextSh(str, Math.round(rx - w), y, color, scale, spacing);
+}
+</script>
+<script>
+/* DUSK PATROL — campaign.js
+   Wave composition, spawn pacing, the upgrade pool and the run's
+   difficulty curve. Loaded as a classic script in order (see index.html). */
+'use strict';
+
+/* ---------- upgrade cards ---------- */
+// `apply` mutates game.mods; `max` caps how many times a card can be taken.
+const UPGRADES = [
+  {
+    id: 'dmg', name: 'HEAVY ROUNDS', desc: 'CANNON DAMAGE +25%', max: 4,
+    apply: m => { m.dmgMult += 0.25; }
+  },
+  {
+    id: 'rate', name: 'FEED BOOST', desc: 'CANNON FIRE RATE +18%', max: 3,
+    apply: m => { m.fireRate += 0.18; }
+  },
+  {
+    id: 'heat', name: 'COOLANT LOOP', desc: 'HEAT CAPACITY +40%', max: 2,
+    apply: m => { m.heatCap += 0.4; }
+  },
+  {
+    id: 'hull', name: 'HULL PLATE', desc: 'MAX HULL +25 AND REPAIR', max: 3,
+    apply: m => { m.hullMax += 25; game.hull = Math.min(m.hullMax, game.hull + 25); }
+  },
+  {
+    id: 'shield', name: 'DEFLECTOR', desc: 'MAX SHIELD +20', max: 3,
+    apply: m => { m.shieldMax += 20; game.shield = m.shieldMax; }
+  },
+  {
+    id: 'pod', name: 'MISSILE POD', desc: 'MISSILE CAPACITY +2', max: 2,
+    apply: m => { m.missileMax += 2; weapons.ammo = m.missileMax; }
+  },
+  {
+    id: 'flare', name: 'FLARE RACK', desc: 'FLARES +1, FASTER RELOAD', max: 2,
+    apply: m => { m.flareMax += 1; m.flareCd *= 0.8; weapons.flares = m.flareMax; }
+  },
+  {
+    id: 'engine', name: 'TUNED ENGINES', desc: 'SPEED +12%, TURN +12%', max: 3,
+    apply: m => { m.speedMult += 0.12; m.turnMult += 0.12; }
+  },
+  {
+    id: 'aim', name: 'TARGETING AI', desc: 'CRITICAL HIT CHANCE +12%', max: 3,
+    apply: m => { m.crit += 0.12; }
+  },
+  {
+    id: 'repair', name: 'NANO REPAIR', desc: 'EACH KILL REPAIRS 4 HULL', max: 2,
+    apply: m => { m.healPerKill += 4; }
+  },
+  {
+    id: 'frame', name: 'G-FRAME', desc: 'BARREL ROLL RECHARGE -35%', max: 2,
+    apply: m => { m.rollCd *= 0.65; }
+  }
+];
+
+function defaultMods() {
+  return {
+    dmgMult: 1, fireRate: 1, heatCap: 1,
+    hullMax: 100, shieldMax: 40,
+    missileMax: 4, flareMax: 3, flareCd: 16,
+    speedMult: 1, turnMult: 1,
+    crit: 0.06, healPerKill: 0, rollCd: 4.0
+  };
+}
+
+/* ---------- campaign state ---------- */
+const campaign = {
+  wave: 0, phase: 'idle', queue: [], spawnT: 0, interT: 0,
+  offers: [], picks: {}, bossWave: false, boss: null,
+  bestWave: 0, cleared: 0
+};
+try { campaign.bestWave = parseInt(localStorage.getItem('duskPatrolBestWave') || '0', 10) || 0; } catch (e) { }
+
+// Every 5th wave is a carrier boss with an escort. Otherwise the mix of
+// drones, interceptors and gunships grows with the wave number.
+function waveComposition(n) {
+  if (n % 5 === 0) {
+    return {
+      boss: true,
+      list: [{ type: 'carrier', count: 1 }, { type: 'interceptor', count: 2 + Math.floor(n / 5) }]
+    };
+  }
+  const list = [{ type: 'drone', count: 3 + n }];
+  if (n >= 2) list.push({ type: 'interceptor', count: Math.min(7, n - 1) });
+  if (n >= 4) list.push({ type: 'gunship', count: Math.min(4, Math.floor((n - 2) / 2)) });
+  return { boss: false, list };
+}
+
+function maxAlive(n) { return Math.min(13, 5 + Math.floor(n * 0.8)); }
+
+function startWave(n) {
+  campaign.wave = n;
+  campaign.picks = campaign.picks || {};
+  const comp = waveComposition(n);
+  campaign.bossWave = comp.boss;
+  campaign.boss = null;
+  campaign.queue = [];
+  for (const group of comp.list) {
+    for (let i = 0; i < group.count; i++) campaign.queue.push(group.type);
+  }
+  // Interleave the queue so a wave does not arrive as one solid block of type.
+  for (let i = campaign.queue.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = campaign.queue[i]; campaign.queue[i] = campaign.queue[j]; campaign.queue[j] = t;
+  }
+  campaign.phase = 'fight';
+  campaign.spawnT = 0.5;
+  campaign.interT = 0;
+  enemies.length = 0;
+  game.waveBanner = 2.6;
+  game.waveBonus = 0;
+  audio.beep(comp.boss ? 300 : 760);
+}
+
+function aliveEnemies() {
+  let n = 0;
+  for (const e of enemies) if (e.alive) n++;
+  return n;
+}
+
+function updateCampaign(dt) {
+  if (game.state !== 'play') return;
+  if (campaign.phase === 'fight') {
+    campaign.spawnT -= dt;
+    if (campaign.queue.length && campaign.spawnT <= 0 && aliveEnemies() < maxAlive(campaign.wave)) {
+      spawnEnemy(campaign.queue.shift());
+      campaign.spawnT = Math.max(0.3, 0.9 - campaign.wave * 0.035);
+    }
+    if (!campaign.queue.length && aliveEnemies() === 0) {
+      campaign.phase = 'clear';
+      campaign.interT = 1.9;
+      game.waveBonus = 500 * campaign.wave;
+      game.score += game.waveBonus;
+      campaign.cleared = campaign.wave;
+      if (campaign.wave > campaign.bestWave) {
+        campaign.bestWave = campaign.wave;
+        try { localStorage.setItem('duskPatrolBestWave', String(campaign.bestWave)); } catch (e) { }
+      }
+      game.shake = Math.max(game.shake, 0.18);
+      audio.waveClear();
+    }
+  } else if (campaign.phase === 'clear') {
+    campaign.interT -= dt;
+    if (campaign.interT <= 0) openUpgrades();
+  }
+}
+
+function pickOffers() {
+  const bag = UPGRADES.filter(u => (campaign.picks[u.id] || 0) < u.max);
+  const offers = [];
+  while (offers.length < 3 && bag.length) {
+    offers.push(bag.splice((Math.random() * bag.length) | 0, 1)[0]);
+  }
+  return offers;
+}
+
+function openUpgrades() {
+  if (campaign.phase !== 'clear') return;
+  campaign.offers = pickOffers();
+  if (!campaign.offers.length) { startWave(campaign.wave + 1); return; }
+  campaign.phase = 'upgrade';
+  game.state = 'upgrade';
+  audio.beep(660);
+}
+
+function chooseUpgrade(i) {
+  if (game.state !== 'upgrade') return;
+  const u = campaign.offers[i];
+  if (!u) return;
+  campaign.picks[u.id] = (campaign.picks[u.id] || 0) + 1;
+  u.apply(game.mods);
+  game.hull = Math.min(game.hull, game.mods.hullMax);
+  game.shield = Math.min(game.shield, game.mods.shieldMax);
+  audio.upgrade();
+  game.state = 'play';
+  campaign.phase = 'clear';
+  startWave(campaign.wave + 1);
+}
+
+/* ---------- run grading ---------- */
+function runGrade() {
+  const wave = Math.max(1, campaign.wave);
+  const acc = game.missilesFired ? game.missileHits / game.missilesFired : 0;
+  let pts = Math.min(4, wave / 2.6);
+  pts += Math.min(3, game.score / (wave * 900));
+  pts += Math.min(2, game.bestCombo / 8);
+  pts += acc > 0.5 ? 1 : acc > 0.25 ? 0.5 : 0;
+  if (pts >= 8.6) return 'S';
+  if (pts >= 7.1) return 'A';
+  if (pts >= 5.6) return 'B';
+  if (pts >= 4.0) return 'C';
+  return 'D';
+}
+</script>
+<script>
+/* DUSK PATROL — enemies.js
+   Hostile definitions and behaviour: patrol drones, interceptors, gunships
+   and the carrier boss, plus the enemy projectile pool.
+   Loaded as a classic script in order (see index.html); globals are shared. */
+'use strict';
+
+const enemies = [];
+const ebullets = [];
+
+const ENEMY_DEFS = {
+  drone: {
+    hp: 60, r: 5.5, score: 100, name: 'DRONE', points: 100,
+    color: [0.55, 0.20, 0.16], accent: [1.0, 0.55, 0.22]
+  },
+  interceptor: {
+    hp: 110, r: 6.5, score: 250, name: 'INTERCEPTOR',
+    color: [0.30, 0.34, 0.52], accent: [1.0, 0.30, 0.28]
+  },
+  gunship: {
+    hp: 320, r: 10, score: 600, name: 'GUNSHIP',
+    color: [0.26, 0.30, 0.26], accent: [1.0, 0.72, 0.28]
+  },
+  carrier: {
+    hp: 1400, r: 26, score: 5000, name: 'CARRIER',
+    color: [0.20, 0.19, 0.28], accent: [1.0, 0.42, 0.34]
+  }
+};
+
+function spawnPoint(dist) {
+  const a = Math.random() * TAU;
+  const x = plane.pos[0] + Math.cos(a) * dist;
+  const z = plane.pos[2] + Math.sin(a) * dist;
+  const h = Math.max(terrainHeight(x, z), 0);
+  return [clamp(x, -BOUNDARY + 400, BOUNDARY - 400),
+    clamp(h + 90 + Math.random() * 150, 90, 430),
+    clamp(z, -BOUNDARY + 400, BOUNDARY - 400)];
+}
+
+function spawnEnemy(type) {
+  const def = ENEMY_DEFS[type] || ENEMY_DEFS.drone;
+  const scale = 1 + Math.max(0, campaign.wave - 1) * 0.11;
+  const pos = spawnPoint(type === 'carrier' ? 1000 : 850 + Math.random() * 350);
+  const e = {
+    type, def,
+    pos, vel: [0, 0, 0],
+    hp: def.hp * (type === 'carrier' ? 1 : scale), maxHp: def.hp * (type === 'carrier' ? 1 : scale),
+    r: def.r, alive: true, rot: Math.random() * TAU, phase: Math.random() * TAU,
+    fireT: 1.2 + Math.random() * 2, burst: 0, burstT: 0, hitT: 0, spawnT: 0.55,
+    home: pos.slice(), roll: 0, aggro: 0
+  };
+  if (type === 'carrier') {
+    e.maxHp = e.hp = def.hp + campaign.wave * 60;
+    campaign.boss = e;
+  }
+  enemies.push(e);
+  return e;
+}
+
+/* ---------- enemy projectiles ---------- */
+function fireEnemyBullet(e, speed, dmg, spread, homing, life) {
+  const to = vsub(plane.pos, e.pos);
+  const d = vlen(to) || 1;
+  let dir = vnorm(to);
+  if (spread) {
+    dir = vnorm([
+      dir[0] + (Math.random() - 0.5) * spread,
+      dir[1] + (Math.random() - 0.5) * spread,
+      dir[2] + (Math.random() - 0.5) * spread
+    ]);
+  }
+  ebullets.push({
+    p: vadd(e.pos, vmul(dir, e.r + 1)),
+    v: vmul(dir, speed),
+    life: life || 3.2, dmg, homing: homing || 0, trail: 0, kind: homing ? 1 : 0
+  });
+}
+
+function updateEnemyBullets(dt) {
+  for (let i = ebullets.length - 1; i >= 0; i--) {
+    const b = ebullets[i];
+    b.life -= dt;
+    if (b.homing > 0 && plane.alive) {
+      const want = vnorm(vsub(plane.pos, b.p));
+      const cur = vnorm(b.v);
+      b.v = vmul(vnorm(vlerp(cur, want, clamp(dt * b.homing, 0, 1))), vlen(b.v));
+    }
+    b.p = vadd(b.p, vmul(b.v, dt));
+    b.trail -= dt;
+    if (b.trail <= 0 && b.kind === 1) {
+      spawnSmoke(b.p.slice(), [0, 1.5, 0], 1.4, 0.5, [0.62, 0.55, 0.55], 7, 0.42);
+      b.trail = 0.04;
+    }
+    let dead = b.life <= 0;
+    if (!dead && plane.alive && vdist(b.p, plane.pos) < 7.5) {
+      damagePlayer(b.dmg, b.p);
+      dead = true;
+    }
+    if (!dead && b.p[1] < Math.max(terrainHeight(b.p[0], b.p[2]), 0) + 1) dead = true;
+    if (dead) ebullets.splice(i, 1);
+  }
+}
+
+/* ---------- per-type behaviour ---------- */
+function moveEnemy(e, dt) {
+  const toP = vsub(plane.pos, e.pos);
+  const dist = vlen(toP) || 1;
+  const dirP = vmul(toP, 1 / dist);
+
+  if (e.type === 'drone') {
+    const a = game.time * 0.35 + e.phase;
+    const want = [
+      e.home[0] + Math.cos(a) * 46 - e.pos[0],
+      e.home[1] + Math.sin(game.time * 1.1 + e.phase) * 6 - e.pos[1],
+      e.home[2] + Math.sin(a) * 46 - e.pos[2]
+    ];
+    e.vel = vlerp(e.vel, vmul(want, 1.6), 1 - Math.exp(-dt * 2.4));
+    e.rot += dt * 1.1;
+  } else if (e.type === 'interceptor') {
+    // Close to a firing distance, then orbit and weave.
+    const want = dist > 230 ? vmul(dirP, 150) : dist < 130 ? vmul(dirP, -120) : vmul(dirP, 0);
+    const side = vnorm(vcross(dirP, [0, 1, 0]));
+    const orbit = vmul(side, Math.sin(game.time * 0.8 + e.phase) * 95);
+    e.vel = vlerp(e.vel, vadd(want, orbit), 1 - Math.exp(-dt * 1.9));
+    e.roll = clamp(-Math.sin(game.time * 0.8 + e.phase) * 0.5, -0.6, 0.6);
+    e.rot = Math.atan2(e.vel[0], e.vel[2]);
+  } else if (e.type === 'gunship') {
+    const want = dist > 340 ? vmul(dirP, 70) : dist < 240 ? vmul(dirP, -50) : [0, 0, 0];
+    const drift = [Math.cos(game.time * 0.4 + e.phase) * 24, 0, Math.sin(game.time * 0.4 + e.phase) * 24];
+    e.vel = vlerp(e.vel, vadd(want, drift), 1 - Math.exp(-dt * 1.1));
+    e.rot += dt * 0.35;
+  } else if (e.type === 'carrier') {
+    // Slow orbit around the bay centre; the boss does not chase.
+    const a = game.time * 0.10 + e.phase;
+    const cx = 60 + Math.cos(a) * 620, cz = Math.sin(a) * 620;
+    const want = [cx - e.pos[0], 0, cz - e.pos[2]];
+    e.vel = vlerp(e.vel, vmul(want, 0.55), 1 - Math.exp(-dt * 0.8));
+    e.rot += dt * 0.16;
+  }
+
+  e.pos = vadd(e.pos, vmul(e.vel, dt));
+  const gh = Math.max(terrainHeight(e.pos[0], e.pos[2]), 0);
+  if (e.pos[1] < gh + 26) { e.pos[1] = gh + 26; if (e.vel[1] < 0) e.vel[1] = 0; }
+  if (e.pos[1] > 520) { e.pos[1] = 520; if (e.vel[1] > 0) e.vel[1] = 0; }
+  const lim = BOUNDARY - 260;
+  e.pos[0] = clamp(e.pos[0], -lim, lim);
+  e.pos[2] = clamp(e.pos[2], -lim, lim);
+}
+
+function enemyShoot(e, dt) {
+  const dist = vdist(e.pos, plane.pos);
+  if (!plane.alive) return;
+  e.fireT -= dt;
+  if (e.fireT > 0) return;
+
+  if (e.type === 'drone') {
+    if (dist < 760) {
+      fireEnemyBullet(e, 150, 6, 0.05, 0, 3.4);
+      audio.enemyShot(0.5);
+    }
+    e.fireT = 2.4 + Math.random() * 1.4;
+  } else if (e.type === 'interceptor') {
+    if (dist < 900) {
+      e.burst = 3; e.burstT = 0;
+      e.fireT = 2.0 + Math.random() * 0.8;
+    } else e.fireT = 0.6;
+  } else if (e.type === 'gunship') {
+    if (dist < 1100) {
+      if (Math.random() < 0.45) {
+        fireEnemyBullet(e, 90, 14, 0, 1.5, 5.0);
+        audio.enemyShot(0.8);
+      } else {
+        for (let i = 0; i < 5; i++) fireEnemyBullet(e, 130, 7, 0.42, 0, 3.0);
+        audio.enemyShot(0.7);
+      }
+    }
+    e.fireT = 2.6 + Math.random() * 1.2;
+  } else if (e.type === 'carrier') {
+    const hurt = e.hp / e.maxHp < 0.5;
+    if (dist < 1600) {
+      const n = hurt ? 11 : 7;
+      for (let i = 0; i < n; i++) fireEnemyBullet(e, 140, 9, hurt ? 0.55 : 0.4, 0, 3.4);
+      audio.enemyShot(1.0);
+      // Escort launches: the carrier keeps feeding the fight.
+      if (hurt && Math.random() < 0.5 && enemies.length < 12) spawnEnemy('drone');
+    }
+    e.fireT = hurt ? 1.5 : 2.3;
+  }
+  if (e.burst > 0) { e.burstT = 0; }
+}
+
+function updateEnemies(dt) {
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (!e.alive) { enemies.splice(i, 1); continue; }
+    if (e.spawnT > 0) { e.spawnT -= dt; }
+    if (e.hitT > 0) e.hitT -= dt;
+    moveEnemy(e, dt);
+
+    if (e.type === 'interceptor' && e.burst > 0) {
+      e.burstT -= dt;
+      if (e.burstT <= 0) {
+        fireEnemyBullet(e, 260, 5, 0.035, 0.6, 2.2);
+        audio.enemyShot(0.35);
+        e.burst--; e.burstT = 0.12;
+      }
+    } else {
+      enemyShoot(e, dt);
+    }
+
+    // Collision with the player is mutual damage.
+    if (plane.alive && vdist(e.pos, plane.pos) < e.r + 5) {
+      damagePlayer(e.type === 'carrier' ? 34 : 20, e.pos);
+      hurtEnemy(e, 40);
+    }
+  }
+  updateEnemyBullets(dt);
+}
+
+/* ---------- damage ---------- */
+function hurtEnemy(e, dmg, crit) {
+  if (!e.alive) return false;
+  e.hp -= dmg;
+  e.hitT = 0.09;
+  spawnGlow(e.pos, [0, 0, 0], 3.2, 0.10, crit ? [1, 0.95, 0.55] : [1, 0.6, 0.3], 6);
+  if (e.hp <= 0) {
+    e.alive = false;
+    killEnemy(e);
+    return true;
+  }
+  return false;
+}
+
+function killEnemy(e) {
+  const def = e.def;
+  explode(e.pos, e.type === 'carrier' ? 3.0 : e.type === 'gunship' ? 1.7 : 1.0);
+  game.shake = Math.max(game.shake, e.type === 'carrier' ? 1.3 : 0.3);
+  creditKill(e);
+  audio.explosion();
+  if (e.type === 'carrier') {
+    // The boss leaves a field of secondary blasts.
+    for (let i = 0; i < 8; i++) {
+      const off = [e.pos[0] + (Math.random() - 0.5) * 46, e.pos[1] + (Math.random() - 0.5) * 26, e.pos[2] + (Math.random() - 0.5) * 46];
+      explode(off, 0.9);
+    }
+    game.shake = 2.0;
+  }
+  // Clear hostile fire when the boss dies so the win reads clearly.
+  if (e.type === 'carrier') ebullets.length = 0;
+}
+</script>
+<script>
+/* DUSK PATROL — weapons.js
+   Player weapons: hitscan autocannon with heat, lock-on missiles with a
+   reloading magazine, defensive flares and the barrel-roll dodge.
+   Loaded as a classic script in order (see index.html); globals are shared. */
+'use strict';
+
+const weapons = {
+  heat: 0, overheated: false, cd: 0, side: 1,
+  ammo: 4, reloadT: 0, flares: 3, flareCd: 0,
+  rollT: 0, rollCd: 0
+};
+
+// Cannon: 30 rounds/s base, 6 damage, 100 heat by default. Sustained fire
+// overheats in about two seconds, which is what makes the gauge matter.
+const CANNON = { rpm: 1800, dmg: 6, spread: 0.010, range: 1400, heatPerShot: 1.7, cool: 30 };
+
+function resetWeapons() {
+  weapons.heat = 0; weapons.overheated = false; weapons.cd = 0; weapons.side = 1;
+  weapons.ammo = game.mods.missileMax; weapons.reloadT = 0;
+  weapons.flares = game.mods.flareMax; weapons.flareCd = 0;
+  weapons.rollT = 0; weapons.rollCd = 0;
+}
+
+/* ---------- muzzle helpers ---------- */
+const _wMat = m4();
+function muzzlePoint(side) {
+  planeMatrix(_wMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const right = [_wMat[0], _wMat[1], _wMat[2]];
+  const up = [_wMat[4], _wMat[5], _wMat[6]];
+  const fwd = flightForward();
+  return vadd(vadd(plane.pos, vmul(right, 2.1 * side)), vadd(vmul(up, 0.06), vmul(fwd, 5.4)));
+}
+
+/* ---------- autocannon ---------- */
+// Ray against every live hostile, nearest hit wins. Hitscan keeps the tracer
+// exactly where the shot lands, which is what makes the reticle trustworthy.
+function cannonRay(origin, dir) {
+  let best = null, bestT = CANNON.range;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const oc = vsub(origin, e.pos);
+    const b = vdot(oc, dir);
+    const c = vdot(oc, oc) - e.r * e.r;
+    const disc = b * b - c;
+    if (disc < 0) continue;
+    const t = -b - Math.sqrt(disc);
+    if (t > 0 && t < bestT) { bestT = t; best = e; }
+  }
+  return best ? { e: best, t: bestT, p: vadd(origin, vmul(dir, bestT)) } : null;
+}
+
+function fireCannon() {
+  if (game.state !== 'play' || !plane.alive || weapons.overheated || weapons.cd > 0) return;
+  weapons.cd = 1 / (CANNON.rpm * game.mods.fireRate / 60);
+  const side = weapons.side; weapons.side *= -1;
+
+  const m = muzzlePoint(side);
+  const fwd = flightForward();
+  const camRight = [Math.cos(plane.yaw), 0, -Math.sin(plane.yaw)];
+  const aim = vnorm([
+    fwd[0] + camRight[0] * (Math.random() - 0.5) * CANNON.spread,
+    fwd[1] + (Math.random() - 0.5) * CANNON.spread,
+    fwd[2] + camRight[2] * (Math.random() - 0.5) * CANNON.spread
+  ]);
+  const hit = cannonRay(m, aim);
+  const end = hit ? hit.p : vadd(m, vmul(aim, CANNON.range));
+
+  tracers.push({ a: m, b: end, life: 0.055, max: 0.055 });
+  spawnGlow(m, vmul(fwd, 12), 1.5, 0.05, [1, 0.85, 0.5], 4);
+  audio.cannon();
+
+  weapons.heat += CANNON.heatPerShot / game.mods.heatCap;
+  if (weapons.heat >= 100) { weapons.heat = 100; weapons.overheated = true; audio.overheat(); }
+
+  if (hit) {
+    const crit = Math.random() < game.mods.crit;
+    const dmg = CANNON.dmg * game.mods.dmgMult * (crit ? 2.2 : 1);
+    const died = hurtEnemy(hit.e, dmg, crit);
+    spawnGlow(end, vmul(aim, -6), 1.8, 0.07, crit ? [1, 0.95, 0.6] : [1, 0.75, 0.42], 5);
+    if (died) creditShot(true);
+  }
+}
+
+/* ---------- missiles ---------- */
+const LOCK_COS = 0.90;
+function lockTarget(from, fwd) {
+  let target = null, best = LOCK_COS, bestD = 1e9;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const to = vsub(e.pos, from);
+    const d = vlen(to) || 1;
+    const dd = vdot(fwd, vmul(to, 1 / d));
+    if (dd > best && d < bestD) { best = dd; bestD = d; target = e; }
+  }
+  return target;
+}
+
+function fireMissile() {
+  if (game.state !== 'play' || !plane.alive) return;
+  if (weapons.ammo <= 0) { audio.beep(180); return; }
+  if (weapons.cd > 0) return;
+  weapons.ammo--;
+  weapons.cd = 0.30;
+  const fwd = flightForward();
+  const m = muzzlePoint(weapons.side);
+  weapons.side *= -1;
+  missiles.push({
+    p: m, v: vmul(fwd, 200), life: 6, trail: 0,
+    target: lockTarget(plane.pos, fwd), speed: 300, boostT: 0.35
+  });
+  game.missilesFired++;
+  game.shake = Math.max(game.shake, 0.18);
+  audio.missile();
+}
+
+function updateMissiles(dt) {
+  if (weapons.ammo < game.mods.missileMax) {
+    weapons.reloadT += dt;
+    if (weapons.reloadT >= 2.6) { weapons.reloadT = 0; weapons.ammo++; }
+  } else weapons.reloadT = 0;
+
+  for (let i = missiles.length - 1; i >= 0; i--) {
+    const m = missiles[i];
+    m.life -= dt;
+    m.speed = Math.min(620, m.speed + 900 * dt);
+    if (m.target && m.target.alive && m.target !== null) {
+      const want = vnorm(vsub(m.target.pos, m.p));
+      const cur = vnorm(m.v);
+      m.v = vmul(vnorm(vlerp(cur, want, clamp(dt * 3.4, 0, 1))), m.speed);
+    } else {
+      m.v = vmul(vnorm(m.v), m.speed);
+    }
+    m.p = vadd(m.p, vmul(m.v, dt));
+    m.trail -= dt;
+    if (m.trail <= 0) {
+      spawnSmoke(vadd(m.p, vmul(vnorm(m.v), -1.4)), [0, 1.4, 0], 1.7, 0.7, [0.74, 0.68, 0.64], 9, 0.5);
+      m.trail = 0.024;
+    }
+
+    let dead = false;
+    // Proximity fuse: any hostile inside the blast is hit, not only the lock.
+    let hit = null, hd = 1e9;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const d = vdist(m.p, e.pos);
+      if (d < e.r + 12 && d < hd) { hd = d; hit = e; }
+    }
+    if (hit) {
+      const died = hurtEnemy(hit, 95, false);
+      game.missileHits++;
+      explode(m.p, 0.75);
+      audio.explosion();
+      if (died) creditShot(true);
+      dead = true;
+    } else if (m.p[1] < Math.max(terrainHeight(m.p[0], m.p[2]), 0) + 1) {
+      explode(m.p, 0.7); audio.explosion(); dead = true;
+    } else if (m.life <= 0) {
+      explode(m.p, 0.4); dead = true;
+    }
+    if (dead) missiles.splice(i, 1);
+  }
+}
+
+/* ---------- flares ---------- */
+function fireFlares() {
+  if (game.state !== 'play' || !plane.alive) return;
+  if (weapons.flares <= 0 || weapons.flareCd > 0) { audio.beep(180); return; }
+  weapons.flares--;
+  weapons.flareCd = game.mods.flareCd;
+  plane.evade = 0.9;
+  for (let i = 0; i < 10; i++) {
+    const d = randDir(Math.random);
+    spawnGlow(vadd(plane.pos, vmul(d, 3)), vadd(vmul(d, 42), vmul(plane.vel || [0, 0, 0], 0.2)),
+      3.2, 0.9, [1, 0.55, 0.2], 2);
+  }
+  // Break every missile lock in the air.
+  let broken = 0;
+  for (const b of ebullets) {
+    if (b.homing > 0) { b.homing = 0; b.life = Math.min(b.life, 1.1); broken++; }
+  }
+  game.shake = Math.max(game.shake, 0.12);
+  audio.flare();
+  if (broken) pops.push({ p: plane.pos.slice(), text: 'DECOY', t: 1.0, col: COL.amber });
+}
+
+/* ---------- barrel roll dodge ---------- */
+function startBarrel() {
+  if (game.state !== 'play' || !plane.alive) return;
+  if (weapons.rollCd > 0 || plane.barrelT > 0) { audio.beep(180); return; }
+  plane.barrelT = 0.72;
+  weapons.rollCd = game.mods.rollCd;
+  plane.evade = Math.max(plane.evade || 0, 0.55);
+  audio.beep(880);
+}
+
+function updateWeapons(dt) {
+  weapons.cd = Math.max(0, weapons.cd - dt);
+  weapons.flareCd = Math.max(0, weapons.flareCd - dt);
+  weapons.rollCd = Math.max(0, weapons.rollCd - dt);
+
+  const firing = plane.alive && game.state === 'play' && !weapons.overheated &&
+    (keys.Space || keys.Mouse0 || touch.fire);
+  if (firing) fireCannon();
+  // Heat always bleeds off; it just bleeds faster when the trigger is released.
+  if (!firing && weapons.heat > 0) {
+    weapons.heat = Math.max(0, weapons.heat - CANNON.cool * dt / game.mods.heatCap);
+  } else if (weapons.overheated) {
+    weapons.heat = Math.max(0, weapons.heat - CANNON.cool * 0.55 * dt / game.mods.heatCap);
+  }
+  if (weapons.overheated && weapons.heat <= 25) weapons.overheated = false;
+
+  if (plane.evade > 0) plane.evade -= dt;
+
+  for (let i = tracers.length - 1; i >= 0; i--) {
+    tracers[i].life -= dt;
+    if (tracers[i].life <= 0) tracers.splice(i, 1);
+  }
 }
 </script>
 <script>
@@ -1264,8 +2153,18 @@ window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
   if (!keys[k]) {
+    if (game.state === 'upgrade') {
+      if (k === 'Digit1') chooseUpgrade(0);
+      else if (k === 'Digit2') chooseUpgrade(1);
+      else if (k === 'Digit3') chooseUpgrade(2);
+      else if (k === 'Enter') chooseUpgrade(0);
+      else if (k === 'KeyP' || k === 'Escape') { /* no pause over the card screen */ }
+      keys[k] = true;
+      return;
+    }
     if (k === 'Enter') onEnter();
     else if (k === 'KeyF') fireMissile();
+    else if (k === 'KeyX') fireFlares();
     else if (k === 'KeyC') cycleCamera();
     else if (k === 'Digit1') setCamera(0);
     else if (k === 'Digit2') setCamera(1);
@@ -1278,18 +2177,37 @@ window.addEventListener('keydown', e => {
   keys[k] = true;
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
-glCanvas.addEventListener('pointerdown', e => {
-  if (e.pointerType !== 'mouse') return;
-  audio.init();
+
+function lockPointer() {
   if (game.state === 'play' && glCanvas.requestPointerLock) {
     try { glCanvas.requestPointerLock(); } catch (err) { }
   }
+}
+glCanvas.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse') return;
+  audio.init();
+  if (game.state === 'upgrade') {
+    // Clicking the card itself is handled by the HUD hit test below.
+    const hit = hudCardAt(e.clientX, e.clientY);
+    if (hit >= 0) chooseUpgrade(hit);
+    return;
+  }
+  if (e.button === 0) keys.Mouse0 = true;
+  if (e.button === 2) fireMissile();
+  lockPointer();
 });
+window.addEventListener('pointerup', e => {
+  if (e.pointerType === 'mouse' && e.button === 0) keys.Mouse0 = false;
+});
+glCanvas.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement === glCanvas) {
     mouseDX += e.movementX;
     mouseDY += e.movementY;
   }
+});
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== glCanvas) keys.Mouse0 = false;
 });
 // Leaving the tab or window mid-flight pauses instead of flying on unattended.
 function releaseInputs() {
@@ -1299,6 +2217,22 @@ function releaseInputs() {
 }
 window.addEventListener('blur', releaseInputs);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseInputs(); });
+
+/* ---------- upgrade card hit test ---------- */
+// The HUD draws three cards; this maps a click in CSS pixels to a card index.
+function hudCardAt(clientX, clientY) {
+  if (game.state !== 'upgrade') return -1;
+  const r = frameEl.getBoundingClientRect();
+  if (!r.width || !r.height) return -1;
+  const gx = (clientX - r.left) / r.width * W;
+  const gy = (clientY - r.top) / r.height * H;
+  const cards = upgradeCardRects();
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    if (gx >= c.x && gx <= c.x + c.w && gy >= c.y && gy <= c.y + c.h) return i;
+  }
+  return -1;
+}
 
 /* ---------- touch ---------- */
 // A floating stick on the left half (up = nose up, sideways = roll) and
@@ -1330,8 +2264,13 @@ window.addEventListener('pointerdown', e => {
   if (e.pointerType === 'mouse') return;
   touch.enable(true);
   audio.init();
-  // Taps outside the controls drive the menus: start, retry and resume.
+  // Taps outside the controls drive the menus: start, retry, resume, upgrade.
   if (e.target.closest('button') || e.target.closest('.zone')) return;
+  if (game.state === 'upgrade') {
+    const hit = hudCardAt(e.clientX, e.clientY);
+    if (hit >= 0) chooseUpgrade(hit);
+    return;
+  }
   if (game.state === 'title' || game.state === 'results' || game.state === 'pause') onEnter();
 });
 
@@ -1368,8 +2307,10 @@ for (const btn of touch.root.querySelectorAll('button')) {
     e.preventDefault();
     touch.capture(btn, e.pointerId);
     btn.classList.add('on');
-    if (act === 'fire') { touch.fire = true; fireMissile(); }
+    if (act === 'fire') touch.fire = true;
     else if (act === 'boost') touch.boost = true;
+    else if (act === 'msl') fireMissile();
+    else if (act === 'flare') fireFlares();
     else if (act === 'roll') startBarrel();
     else if (act === 'cam') cycleCamera();
     else if (act === 'pause') togglePause();
@@ -1401,6 +2342,7 @@ function syncTouchUI() {
 const audio = {
   ctx: null, master: null, eng: null, engFilter: null, osc1: null, osc2: null,
   wind: null, windGain: null, boostGain: null, muted: false,
+  cannonT: 0,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     try {
@@ -1452,11 +2394,11 @@ const audio = {
     this.boostGain.gain.setTargetAtTime(boost * 0.05, t, 0.12);
     this.windGain.gain.setTargetAtTime(0.018 + speed * 0.0002, t, 0.2);
   },
-  burst(dur, freq, q, gain, sweep) {
+  burst(dur, freq, q, gain, sweep, type) {
     if (!this.ctx) return;
     const ctx = this.ctx, t = ctx.currentTime;
     const src = ctx.createBufferSource(); src.buffer = this.noiseBuf;
-    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q || 1;
+    const f = ctx.createBiquadFilter(); f.type = type || 'bandpass'; f.Q.value = q || 1;
     f.frequency.setValueAtTime(freq, t);
     if (sweep) f.frequency.exponentialRampToValueAtTime(Math.max(80, sweep), t + dur);
     const g = ctx.createGain();
@@ -1465,7 +2407,16 @@ const audio = {
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start(t); src.stop(t + dur + 0.05);
   },
+  // Cannon shots fire ~60 times a second, so keep them cheap and rate-limited.
+  cannon() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (now - this.cannonT < 0.045) return;
+    this.cannonT = now;
+    this.burst(0.05, 2400, 0.9, 0.05, 700);
+  },
   missile() { this.burst(0.55, 2600, 1.2, 0.16, 420); },
+  enemyShot(v) { this.burst(0.12, 900, 2.0, 0.05 * (v || 0.5), 400); },
   explosion() {
     this.burst(1.1, 900, 0.6, 0.42, 90);
     if (!this.ctx) return;
@@ -1474,6 +2425,58 @@ const audio = {
     o.type = 'sine'; o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(32, t + 0.5);
     g.gain.setValueAtTime(0.30, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.65);
+  },
+  hit() {
+    this.burst(0.22, 320, 0.8, 0.24, 120, 'lowpass');
+  },
+  flare() {
+    this.burst(0.7, 1800, 0.7, 0.20, 300, 'highpass');
+  },
+  overheat() {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = 210 - i * 40;
+      g.gain.setValueAtTime(0.05, t + i * 0.07);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18 + i * 0.07);
+      o.connect(g); g.connect(this.master); o.start(t + i * 0.07); o.stop(t + 0.3 + i * 0.07);
+    }
+  },
+  waveClear() {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    [523, 659, 784, 1046].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0, t + i * 0.09);
+      g.gain.linearRampToValueAtTime(0.07, t + i * 0.09 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.09 + 0.34);
+      o.connect(g); g.connect(this.master); o.start(t + i * 0.09); o.stop(t + i * 0.09 + 0.4);
+    });
+  },
+  upgrade() {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    [784, 1175].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.055, t + i * 0.08);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.22);
+      o.connect(g); g.connect(this.master); o.start(t + i * 0.08); o.stop(t + i * 0.08 + 0.25);
+    });
+  },
+  gameOver() {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    [392, 330, 262, 196].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0, t + i * 0.16);
+      g.gain.linearRampToValueAtTime(0.08, t + i * 0.16 + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.16 + 0.5);
+      o.connect(g); g.connect(this.master); o.start(t + i * 0.16); o.stop(t + i * 0.16 + 0.55);
+    });
   },
   beep(f) {
     if (!this.ctx) return;
@@ -1492,15 +2495,20 @@ const audio = {
 </script>
 <script>
 /* DUSK PATROL — game.js
-   Game state and simulation: particles, drones, missiles, the jet,
-   cameras, state transitions and the per-frame update.
-   Loaded as a classic script in order (see index.html); globals are shared. */
+   Game state and simulation: the jet, damage, particles, camera, scoring
+   and the per-frame update. Loaded as a classic script in order (see
+   index.html); globals are shared. */
 'use strict';
 
 const game = {
-  state: 'title', time: 0, timer: 120, score: 0, kills: 0, shots: 0, best: 0, newBest: false,
+  state: 'title', time: 0, score: 0, best: 0, newBest: false,
+  hull: 100, shield: 40, shieldT: 0,
+  kills: 0, missilesFired: 0, missileHits: 0,
+  combo: 1, comboKills: 0, comboT: 0, bestCombo: 1,
   camMode: 0, camAngle: 0, shake: 0, lock: null,
-  fps: 60, debug: location.search.indexOf('debug') >= 0
+  fps: 60, debug: location.search.indexOf('debug') >= 0,
+  waveBanner: 0, waveBonus: 0, visibleChunks: 0, hitFlash: 0,
+  mods: defaultMods(), grade: 'D', paused: false, startedAt: 0
 };
 try { game.best = parseInt(localStorage.getItem('duskPatrolBest') || '0', 10) || 0; } catch (e) { }
 
@@ -1508,13 +2516,13 @@ const START = [coastX(1060) - 160, 205, 1060];
 const plane = {
   pos: START.slice(), yaw: 0, pitch: 0, roll: 0, barrel: 0, barrelT: 0,
   speed: 175, boost: 0, alive: true, respawn: 0, throttle: 0.62, agl: 200, edge: 0,
-  inPitch: 0, inYaw: 0, inRoll: 0
+  inPitch: 0, inYaw: 0, inRoll: 0, evade: 0, vel: [0, 0, 0], invuln: 0
 };
 const cam = { pos: [0, 0, 0], look: [0, 0, 1], up: [0, 1, 0], snap: true };
 const camMat = m4(), viewM = m4(), projM = m4(), vpM = m4();
 
-let mslAmmo = 8, mslCd = 0, mslReload = 0, missileSide = 1;
-const missiles = [], drones = [], smokeP = [], glowP = [], pops = [];
+const missiles = [], smokeP = [], glowP = [], pops = [], tracers = [];
+const BOUNDARY = 6200, BOUNDARY_WARN = 5400;
 
 function flightForward() {
   const cp = Math.cos(plane.pitch);
@@ -1523,11 +2531,11 @@ function flightForward() {
 
 /* ---------- particles ---------- */
 function spawnGlow(p, v, size, life, col, grow) {
-  if (glowP.length > 250) glowP.shift();
+  if (glowP.length > 320) glowP.shift();
   glowP.push({ p: p.slice(), v: v.slice(), size, life, max: life, col, grow: grow || 0, a: 1 });
 }
 function spawnSmoke(p, v, size, life, col, grow, alpha) {
-  if (smokeP.length > 230) smokeP.shift();
+  if (smokeP.length > 260) smokeP.shift();
   smokeP.push({ p: p.slice(), v: v.slice(), size, life, max: life, col, grow: grow || 0, a: alpha === undefined ? 0.6 : alpha });
 }
 function randDir(r) {
@@ -1536,16 +2544,16 @@ function randDir(r) {
 }
 function explode(p, scale) {
   const r = mulberry32(((game.time * 997) | 0) + ((p[0] * 13) | 0));
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < 30; i++) {
     const d = randDir(r);
-    spawnGlow(vadd(p, vmul(d, 2 + r() * 5)), vmul(d, 18 + r() * 55 * scale),
-      (4 + r() * 9) * scale, 0.35 + r() * 0.65, [1, 0.45 + r() * 0.5, 0.10 + r() * 0.15], 28);
+    spawnGlow(vadd(p, vmul(d, 2 + r() * 5)), vmul(d, 18 + r() * 58 * scale),
+      (4 + r() * 9) * scale, 0.35 + r() * 0.7, [1, 0.45 + r() * 0.5, 0.10 + r() * 0.15], 28);
   }
   spawnGlow(p, [0, 0, 0], 30 * scale, 0.16, [1, 0.92, 0.72], 120);
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 15; i++) {
     const d = randDir(r);
     spawnSmoke(vadd(p, vmul(d, 3)), [d[0] * 6, 4 + r() * 10, d[2] * 6],
-      (4 + r() * 5) * scale, 1.0 + r() * 1.2, [0.38, 0.33, 0.34], 9, 0.55);
+      (4 + r() * 5) * scale, 1.0 + r() * 1.3, [0.38, 0.33, 0.34], 9, 0.55);
   }
 }
 function updateParticles(dt) {
@@ -1561,130 +2569,111 @@ function updateParticles(dt) {
     g.life -= dt; g.size += g.grow * dt;
     if (g.life <= 0) glowP.splice(i, 1);
   }
-  for (let i = pops.length - 1; i >= 0; i--) { pops[i].t -= dt; if (pops[i].t <= 0) pops.splice(i, 1); }
-}
-
-/* ---------- drones ---------- */
-function resetDrones() {
-  drones.length = 0;
-  for (let i = 0; i < 8; i++) {
-    const h = droneHome(i);
-    drones.push({ home: h.slice(), pos: h.slice(), alive: true, respawn: 0, phase: i * 1.7, rot: i * 0.9 });
-  }
-}
-function killDrone(d) {
-  if (!d.alive) return;
-  d.alive = false; d.respawn = 13 + Math.random() * 5;
-  explode(d.pos, 1.0);
-  game.score += 100; game.kills++;
-  pops.push({ p: d.pos.slice(), text: '+100', t: 1.3 });
-  game.shake = Math.max(game.shake, 0.35);
-  audio.explosion();
-}
-function updateDrones(dt) {
-  for (const d of drones) {
-    if (!d.alive) {
-      d.respawn -= dt;
-      if (d.respawn <= 0) {
-        const h = droneHome((Date.now() / 997 | 0) % 1000);
-        d.home = h.slice(); d.pos = h.slice(); d.alive = true;
-        d.phase = Math.random() * 6; d.rot = Math.random() * 6;
-      }
-      continue;
-    }
-    // Slow patrol circle around the home point, bobbing gently.
-    const a = game.time * 0.22 + d.phase;
-    d.rot += dt * 0.8;
-    d.pos[0] = d.home[0] + Math.cos(a) * 55;
-    d.pos[1] = d.home[1] + Math.sin(game.time * 1.2 + d.phase) * 5;
-    d.pos[2] = d.home[2] + Math.sin(a) * 55;
+  for (let i = pops.length - 1; i >= 0; i--) {
+    pops[i].t -= dt;
+    pops[i].p[1] += dt * 14;
+    if (pops[i].t <= 0) pops.splice(i, 1);
   }
 }
 
-// Missiles home on the drone nearest the nose inside a ~31° cone; the HUD
-// uses the same test so a LOCK marker always means the missile will track.
-const LOCK_COS = 0.86;
-function lockTarget(from, fwd) {
-  let target = null, best = LOCK_COS;
-  for (const d of drones) {
-    if (!d.alive) continue;
-    const dd = vdot(fwd, vnorm(vsub(d.pos, from)));
-    if (dd > best) { best = dd; target = d; }
+/* ---------- scoring ---------- */
+function creditKill(e) {
+  const base = e.def.score;
+  const mult = game.combo;
+  const pts = Math.round(base * mult);
+  game.score += pts;
+  game.kills++;
+  game.comboKills++;
+  game.comboT = 3.0;
+  game.bestCombo = Math.max(game.bestCombo, game.combo);
+  game.combo = Math.min(8, 1 + Math.floor(game.comboKills / 2));
+  if (game.mods.healPerKill > 0 && plane.alive) {
+    game.hull = Math.min(game.mods.hullMax, game.hull + game.mods.healPerKill);
   }
-  return target;
+  pops.push({
+    p: e.pos.slice(),
+    text: '+' + pts + (mult > 1 ? ' X' + mult : ''),
+    t: 1.3, col: mult > 1 ? COL.amber : COL.bone
+  });
+  if (e.type === 'carrier') {
+    pops.push({ p: [e.pos[0], e.pos[1] + 14, e.pos[2]], text: 'CARRIER DOWN', t: 2.4, col: COL.red });
+  }
 }
-
-/* ---------- missiles ---------- */
-function fireMissile() {
-  if (game.state !== 'play' || !plane.alive || mslAmmo <= 0 || mslCd > 0) return;
-  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
-  const right = [camMat[0], camMat[1], camMat[2]], up = [camMat[4], camMat[5], camMat[6]];
-  const fwd = flightForward();
-  const p = vadd(vadd(plane.pos, vmul(right, 3.2 * missileSide)), vadd(vmul(up, -0.28), vmul(fwd, 1.0)));
-  missileSide *= -1;
-  missiles.push({ p, v: vmul(fwd, 420), life: 5, trail: 0, target: lockTarget(p, fwd) });
-  mslAmmo--; mslCd = 0.42; game.shots++;
-  game.shake = Math.max(game.shake, 0.22);
-  audio.missile();
-}
-function updateMissiles(dt) {
-  mslCd = Math.max(0, mslCd - dt);
-  mslReload += dt;
-  if (mslReload > 3) { mslReload = 0; if (mslAmmo < 8) mslAmmo++; }
-  for (let i = missiles.length - 1; i >= 0; i--) {
-    const m = missiles[i];
-    m.life -= dt;
-    if (m.target && m.target.alive) {
-      const want = vnorm(vsub(m.target.pos, m.p));
-      const cur = vnorm(m.v);
-      m.v = vmul(vnorm(vlerp(cur, want, clamp(dt * 3.0, 0, 1))), 440);
-    }
-    m.p = vadd(m.p, vmul(m.v, dt));
-    m.trail -= dt;
-    if (m.trail <= 0) {
-      spawnSmoke(vadd(m.p, vmul(vnorm(m.v), -1.2)), [0, 1.2, 0], 1.6, 0.7, [0.72, 0.66, 0.62], 9, 0.5);
-      m.trail = 0.026;
-    }
-    // Proximity fuse: any drone in range is hit, not only the locked one.
-    const hit = drones.find(d => d.alive && vdist(m.p, d.pos) < 18);
-    let dead = false;
-    if (hit) {
-      killDrone(hit); dead = true;
-    } else if (m.p[1] < Math.max(terrainHeight(m.p[0], m.p[2]), 0) + 1) {
-      explode(m.p, 0.7); audio.explosion(); dead = true;
-    } else if (m.life <= 0) {
-      explode(m.p, 0.4); dead = true;
-    }
-    if (dead) missiles.splice(i, 1);
+function creditShot() { /* reserved for accuracy bookkeeping */ }
+function updateCombo(dt) {
+  if (game.comboT > 0) {
+    game.comboT -= dt;
+    if (game.comboT <= 0) { game.combo = 1; game.comboKills = 0; }
   }
 }
 
-/* ---------- plane ---------- */
-function crash() {
+/* ---------- player damage ---------- */
+function damagePlayer(dmg, at) {
+  if (!plane.alive || game.state !== 'play') return;
+  if (plane.invuln > 0 || (plane.evade || 0) > 0) return;
+  game.hitFlash = Math.min(1, game.hitFlash + dmg / 40);
+  if (game.shield > 0) {
+    const absorbed = Math.min(game.shield, dmg);
+    game.shield -= absorbed;
+    dmg -= absorbed;
+    game.shieldT = 0;
+    if (at) spawnGlow(at, [0, 0, 0], 4, 0.16, [0.45, 0.85, 1.0], 14);
+  }
+  if (dmg > 0) {
+    game.hull -= dmg;
+    game.shake = Math.max(game.shake, 0.25 + dmg * 0.01);
+    if (at) spawnGlow(at, [0, 0, 0], 5, 0.2, [1, 0.35, 0.25], 18);
+  }
+  audio.hit();
+  if (game.hull <= 0) {
+    game.hull = 0;
+    crash(true);
+  }
+}
+
+function crash(killed) {
   if (!plane.alive) return;
   if (game.camMode === 1) { game.camMode = 0; cam.snap = true; }
-  plane.alive = false; plane.respawn = 2.0;
-  explode(plane.pos, 1.8);
-  game.shake = 1.2; game.lock = null;
+  plane.alive = false;
+  explode(plane.pos, 2.0);
+  game.shake = 1.4; game.lock = null;
   audio.explosion();
+  game.combo = 1; game.comboKills = 0; game.comboT = 0;
+  if (killed) {
+    plane.respawn = 2.4;
+    plane.dead = true;
+  } else {
+    // A terrain or boundary crash costs hull and puts you back in the air.
+    game.hull = Math.max(0, game.hull - 30);
+    plane.respawn = 2.0;
+    plane.dead = game.hull <= 0;
+  }
 }
+
 function respawnPlane() {
   plane.pos = START.slice();
   plane.yaw = 0; plane.pitch = 0; plane.roll = 0;
   plane.barrel = 0; plane.barrelT = 0;
   plane.speed = 175; plane.boost = 0; plane.alive = true;
+  plane.invuln = 1.6; plane.evade = 0; plane.vel = [0, 0, 0];
+  game.shield = game.mods.shieldMax;
+  game.shieldT = 0;
   cam.snap = true;
 }
-function startBarrel() {
-  if (game.state === 'play' && plane.alive && plane.barrelT <= 0) { plane.barrelT = 0.9; audio.beep(880); }
-}
+
+/* ---------- plane ---------- */
 function updatePlane(dt) {
   if (game.state !== 'play') return;
   if (!plane.alive) {
     plane.respawn -= dt;
-    if (plane.respawn <= 0) respawnPlane();
+    if (plane.respawn <= 0) {
+      if (plane.dead) { endGame(); return; }
+      respawnPlane();
+    }
     return;
   }
+  if (plane.invuln > 0) plane.invuln -= dt;
+
   let pIn = ((keys.KeyW || keys.ArrowUp) ? 1 : 0) - ((keys.KeyS || keys.ArrowDown) ? 1 : 0) + touch.pitch;
   let yIn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
   let rIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0) + touch.roll;
@@ -1697,31 +2686,31 @@ function updatePlane(dt) {
   plane.inYaw = lerp(plane.inYaw, clamp(yIn, -1, 1), k);
   plane.inRoll = lerp(plane.inRoll, clamp(rIn, -1, 1), k);
 
-  // Full aerobatics: pitch and roll wrap instead of stopping at 90/180 degrees.
-  plane.pitch = wrapAngle(plane.pitch + plane.inPitch * 1.5 * dt);
-  plane.roll = wrapAngle(plane.roll + plane.inRoll * 3.0 * dt);
+  const turn = game.mods.turnMult;
+  plane.pitch = wrapAngle(plane.pitch + plane.inPitch * 1.5 * turn * dt);
+  plane.roll = wrapAngle(plane.roll + plane.inRoll * 3.0 * turn * dt);
   if (Math.abs(rIn) < 0.02 && Math.abs(plane.inRoll) < 0.06) {
     plane.roll = wrapAngle(plane.roll + Math.atan2(Math.sin(-plane.roll), Math.cos(-plane.roll)) * (1 - Math.exp(-dt * 1.05)));
   }
   const yawRate = plane.inYaw * 0.8 + Math.sin(plane.roll) * 1.12;
   plane.yaw += yawRate * dt;
 
-  const boostKey = keys.ShiftLeft || keys.ShiftRight || keys.Space || touch.boost;
-  if (touch.fire) fireMissile(); // holding FIRE keeps shooting at the normal cadence
+  const boostKey = keys.ShiftLeft || keys.ShiftRight || touch.boost;
   plane.boost = lerp(plane.boost, boostKey ? 1 : 0, 1 - Math.exp(-dt * 3.2));
 
   const fwd = flightForward();
-  const target = 130 + plane.throttle * 85 + plane.boost * 145;
+  const target = (130 + plane.throttle * 85 + plane.boost * 145) * game.mods.speedMult;
   plane.speed += (target - plane.speed) * dt * 0.7 - fwd[1] * 27 * dt;
-  plane.speed = clamp(plane.speed, 92, 395);
+  plane.speed = clamp(plane.speed, 92, 395 * game.mods.speedMult);
 
+  plane.vel = vmul(fwd, plane.speed);
   plane.pos[0] += fwd[0] * plane.speed * dt;
   plane.pos[1] += fwd[1] * plane.speed * dt;
   plane.pos[2] += fwd[2] * plane.speed * dt;
 
   if (plane.barrelT > 0) {
     plane.barrelT -= dt;
-    const t = clamp(1 - plane.barrelT / 0.9, 0, 1);
+    const t = clamp(1 - plane.barrelT / 0.72, 0, 1);
     plane.barrel = TAU * smoothstep(0, 1, t);
     if (plane.barrelT <= 0) plane.barrel = 0;
   }
@@ -1730,8 +2719,8 @@ function updatePlane(dt) {
   const gh = Math.max(terrainHeight(plane.pos[0], plane.pos[2]), 0);
   plane.agl = plane.pos[1] - gh;
   plane.edge = Math.max(Math.abs(plane.pos[0]), Math.abs(plane.pos[2]));
-  if (plane.agl < 3.2) crash();
-  if (plane.edge > BOUNDARY) crash();
+  if (plane.agl < 3.2) crash(false);
+  if (plane.edge > BOUNDARY) crash(false);
   if (!plane.alive) return;
   audio.update(plane.speed, plane.boost);
 
@@ -1739,7 +2728,6 @@ function updatePlane(dt) {
   if (lock && lock !== game.lock) audio.beep(1180);
   game.lock = lock;
 }
-const BOUNDARY = 6200, BOUNDARY_WARN = 5400;
 
 function updateTitlePlane() {
   const a = game.time * 0.075, R = 780;
@@ -1751,12 +2739,9 @@ function updateTitlePlane() {
 }
 
 /* ---------- camera ---------- */
-// Chase smoothing time constants. The same values drive velocity compensation
-// so exponential smoothing produces zero steady-state lag behind the jet.
 const CHASE_TAU = { pos: 0.12, look: 0.07, up: 0.10 };
 function updateCamera(dt) {
   planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
-  const right = [camMat[0], camMat[1], camMat[2]];
   const up = [camMat[4], camMat[5], camMat[6]];
   const fwd = [-camMat[8], -camMat[9], -camMat[10]];
 
@@ -1765,7 +2750,8 @@ function updateCamera(dt) {
   if (game.state === 'title') {
     const a = game.time * 0.17;
     eye = [plane.pos[0] + Math.cos(a) * 36, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 36];
-    look = vadd(plane.pos, [0, 1, 0]);
+    // Aim a little below the jet so it sits above the menu panel.
+    look = vadd(plane.pos, [0, -16, 0]);
     upv = [0, 1, 0]; fov = 55;
     snap = true;
   } else if (game.camMode === 1 && plane.alive) {
@@ -1785,15 +2771,13 @@ function updateCamera(dt) {
     eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vmul(blend, 5.8));
     look = vadd(plane.pos, vadd(vmul(fwd, 70), vmul(up, 2.4)));
     upv = blend; fov = 60 + plane.boost * 11;
-    if (game.state === 'results') {
+    if (game.state === 'results' || game.state === 'upgrade') {
       game.camAngle += dt * 0.22;
       eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
       look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
       snap = true;
     } else if (game.state === 'play' && plane.alive) {
-      // Velocity compensation cancels the steady-state lag of exponential
-      // smoothing, keeping the jet framed while turns and loops ease in.
-      const vel = vmul(fwd, plane.speed);
+      const vel = plane.vel;
       eye = vadd(eye, vmul(vel, CHASE_TAU.pos));
       look = vadd(look, vmul(vel, CHASE_TAU.look));
     } else {
@@ -1813,12 +2797,12 @@ function updateCamera(dt) {
     if (cam.pos[1] < gh + 3) cam.pos[1] = gh + 3;
   }
   const sh = game.shake * 2.4;
-  let shakeX = 0, shakeY = 0, shakeZ = 0;
+  let sx = 0, sy = 0, sz = 0;
   if (sh > 0.02) {
-    shakeX = (Math.random() - 0.5) * sh; shakeY = (Math.random() - 0.5) * sh; shakeZ = (Math.random() - 0.5) * sh;
+    sx = (Math.random() - 0.5) * sh; sy = (Math.random() - 0.5) * sh; sz = (Math.random() - 0.5) * sh;
   }
-  m4look(viewM, [cam.pos[0] + shakeX, cam.pos[1] + shakeY, cam.pos[2] + shakeZ],
-    [cam.look[0] + shakeX * 1.5, cam.look[1] + shakeY * 1.5, cam.look[2] + shakeZ * 1.5], cam.up);
+  m4look(viewM, [cam.pos[0] + sx, cam.pos[1] + sy, cam.pos[2] + sz],
+    [cam.look[0] + sx * 1.5, cam.look[1] + sy * 1.5, cam.look[2] + sz * 1.5], cam.up);
   m4persp(projM, fov * DEG, W / H, 1, 9000);
   m4mul(vpM, projM, viewM);
 }
@@ -1826,33 +2810,40 @@ function updateCamera(dt) {
 /* ---------- state transitions ---------- */
 function startGame() {
   game.state = 'play';
-  game.timer = 120; game.score = 0; game.kills = 0; game.shots = 0; game.camMode = 0; game.newBest = false;
-  game.shake = 0; game.lock = null; game.camAngle = 0;
-  mslAmmo = 8; mslCd = 0; mslReload = 0; missileSide = 1;
+  game.score = 0; game.kills = 0; game.missilesFired = 0; game.missileHits = 0;
+  game.combo = 1; game.comboKills = 0; game.comboT = 0; game.bestCombo = 1;
+  game.camMode = 0; game.newBest = false; game.shake = 0; game.lock = null;
+  game.camAngle = 0; game.hitFlash = 0; game.startedAt = game.time;
+  game.mods = defaultMods();
+  game.hull = game.mods.hullMax; game.shield = game.mods.shieldMax; game.shieldT = 0;
+  campaign.picks = {}; campaign.wave = 0; campaign.cleared = 0;
   missiles.length = 0; smokeP.length = 0; glowP.length = 0; pops.length = 0;
-  resetDrones(); respawnPlane();
+  tracers.length = 0; enemies.length = 0; ebullets.length = 0;
+  resetWeapons(); respawnPlane();
+  plane.dead = false;
+  startWave(1);
   audio.init(); audio.beep(680);
 }
+
 function endGame() {
-  if (game.state !== 'play') return;
+  if (game.state !== 'play' && game.state !== 'upgrade') return;
   game.state = 'results';
+  plane.alive = false;
+  game.grade = runGrade();
   if (game.score > game.best) {
     game.best = game.score;
     game.newBest = true;
     try { localStorage.setItem('duskPatrolBest', String(game.best)); } catch (e) { }
   }
   game.camAngle = Math.atan2(cam.pos[2] - plane.pos[2], cam.pos[0] - plane.pos[0]);
-  audio.beep(440);
+  audio.gameOver();
 }
 function onEnter() {
   audio.init();
   if (game.state === 'title' || game.state === 'results') startGame();
   else if (game.state === 'pause') togglePause();
 }
-function restart() {
-  audio.init();
-  startGame();
-}
+function restart() { audio.init(); startGame(); }
 function togglePause() {
   if (game.state === 'play') { game.state = 'pause'; audio.beep(300); }
   else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
@@ -1869,23 +2860,30 @@ function cycleCamera() { setCamera((game.camMode + 1) % 3); }
 function update(dt) {
   game.time += dt;
   game.shake = Math.max(0, game.shake - dt * 1.7);
+  game.hitFlash = Math.max(0, game.hitFlash - dt * 1.8);
+  if (game.waveBanner > 0) game.waveBanner -= dt;
 
   if (game.state === 'title') {
     updateTitlePlane();
-    updateDrones(dt);
     updateParticles(dt);
   } else if (game.state === 'play') {
-    const sec = Math.ceil(game.timer);
-    game.timer -= dt;
-    if (game.timer > 0 && game.timer <= 10 && Math.ceil(game.timer) < sec) audio.beep(990); // final countdown tick
     updatePlane(dt);
-    updateDrones(dt);
+    if (game.state !== 'play') { updateCamera(dt); return; }
+    updateWeapons(dt);
+    updateEnemies(dt);
     updateMissiles(dt);
     updateParticles(dt);
-    if (game.timer <= 0) { game.timer = 0; endGame(); }
-  } else if (game.state === 'results') {
-    updateDrones(dt);
+    updateCombo(dt);
+    updateCampaign(dt);
+
+    // Shield regenerates after a few quiet seconds.
+    game.shieldT += dt;
+    if (game.shieldT > 6 && game.shield < game.mods.shieldMax) {
+      game.shield = Math.min(game.mods.shieldMax, game.shield + 9 * dt);
+    }
+  } else if (game.state === 'upgrade' || game.state === 'results') {
     updateParticles(dt);
+    if (game.state === 'upgrade') updateCamera(dt);
   }
   updateCamera(dt);
 }
@@ -1898,7 +2896,7 @@ function update(dt) {
 'use strict';
 
 const IDENT = m4id(m4());
-const droneM = m4(), jetM = m4(), cloudM = m4();
+const eM = m4(), jetM = m4(), cloudM = m4();
 const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
 const camRight = [1, 0, 0], camUp = [0, 1, 0];
 
@@ -1978,7 +2976,9 @@ function drawCity() {
 function drawJet() {
   const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
   beginSolid();
-  gl.uniform3fv(U(solidProg, 'uAmbient'), JET_AMB);
+  // Blink the hull while respawn invulnerability is running.
+  const inv = plane.invuln > 0 && (Math.sin(game.time * 26) > 0);
+  gl.uniform3fv(U(solidProg, 'uAmbient'), inv ? [0.75, 0.95, 1.0] : JET_AMB);
   gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
   gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
@@ -2001,16 +3001,37 @@ function drawJet() {
   gl.disable(gl.BLEND);
 }
 
-function drawDrones() {
+function drawEnemies() {
   beginSolid();
-  gl.bindVertexArray(droneMesh.vao);
-  for (const d of drones) {
-    if (!d.alive) continue;
-    m4rotY(droneM, d.rot);
-    droneM[12] = d.pos[0]; droneM[13] = d.pos[1]; droneM[14] = d.pos[2];
-    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, droneM);
-    gl.drawArrays(gl.TRIANGLES, 0, droneMesh.count);
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const mesh = enemyMesh(e.type);
+    const flash = e.hitT > 0;
+    gl.uniform3fv(U(solidProg, 'uAmbient'), flash ? [1.0, 0.95, 0.85] : SOLID_AMB);
+    gl.uniform3fv(U(solidProg, 'uSunColor'), flash ? [1.0, 1.0, 1.0] : SOLID_SUN);
+    if (e.spawnT > 0) {
+      const s = 1 - e.spawnT / 0.55;
+      m4rotY(eM, e.rot);
+      const sc = 0.35 + 0.65 * s;
+      eM[0] *= sc; eM[1] *= sc; eM[2] *= sc;
+      eM[4] *= sc; eM[5] *= sc; eM[6] *= sc;
+      eM[8] *= sc; eM[9] *= sc; eM[10] *= sc;
+    } else {
+      m4rotY(eM, e.rot);
+      if (e.roll) {
+        const c = Math.cos(e.roll), s = Math.sin(e.roll);
+        const a = eM[0], b = eM[1], cc = eM[2];
+        eM[0] = a * c + eM[4] * s; eM[1] = b * c + eM[5] * s; eM[2] = cc * c + eM[6] * s;
+        eM[4] = eM[4] * c - a * s; eM[5] = eM[5] * c - b * s; eM[6] = eM[6] * c - cc * s;
+      }
+    }
+    eM[12] = e.pos[0]; eM[13] = e.pos[1]; eM[14] = e.pos[2];
+    gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, eM);
+    gl.bindVertexArray(mesh.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
   }
+  gl.uniform3fv(U(solidProg, 'uAmbient'), SOLID_AMB);
+  gl.uniform3fv(U(solidProg, 'uSunColor'), SOLID_SUN);
 }
 
 function drawClouds() {
@@ -2020,16 +3041,13 @@ function drawClouds() {
   gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
   gl.uniform1i(U(cloudProg, 'uTex'), 0);
-  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]); // same for every cloud
+  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
   const tint = new Float32Array(3);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
-    // Billboard spans -1..1 * (sx,sy); the diagonal is a safe culling radius.
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
-    // Billboard right = normalize(cross(worldUp, normalize(cam.pos - p))).
-    // cross with up kills the y component, so only x/z need to be normalized.
     const dx = cam.pos[0] - cx, dy = cam.pos[1] - c.y, dz = cam.pos[2] - c.z;
     const dl = Math.hypot(dx, dy, dz) || 1;
     let rx = dz / dl, rz = -dx / dl;
@@ -2048,6 +3066,7 @@ function drawClouds() {
 }
 
 const PT_LIGHT = [1.0, 0.60, 0.26], PT_DRONE = [1.0, 0.18, 0.12], PT_MISSILE = [1.0, 0.86, 0.55];
+const PT_ENEMY = [1.0, 0.24, 0.20], PT_BULLET = [1.0, 0.45, 0.22];
 const PT_LEFT = [1.0, 0.18, 0.18], PT_RIGHT = [0.35, 1.0, 0.55];
 const ptScratch = [0, 0, 0], ptLeft = [0, 0, 0], ptRight = [0, 0, 0];
 function buildPoints() {
@@ -2060,18 +3079,17 @@ function buildPoints() {
     pointData[o + 6] = size; pointData[o + 7] = phase;
     n++;
   };
-  // Point primitives are clipped by their centre, so a 2-unit radius is already
-  // generous; off-screen lights never reach the GPU upload or the point shader.
   for (let i = 0; i < streetLights.length; i++) {
     const p = streetLights[i];
     if (sphereInFrustum(p[0], p[1], p[2], 2)) put(p, PT_LIGHT, 1.25, i * 0.37);
   }
-  for (const d of drones) {
-    if (!d.alive) continue;
-    ptScratch[0] = d.pos[0]; ptScratch[1] = d.pos[1] + 2.2; ptScratch[2] = d.pos[2];
-    put(ptScratch, PT_DRONE, -2.2, d.phase);
+  for (const e of enemies) {
+    if (!e.alive || e.spawnT > 0) continue;
+    ptScratch[0] = e.pos[0]; ptScratch[1] = e.pos[1] + e.r * 0.5; ptScratch[2] = e.pos[2];
+    put(ptScratch, PT_ENEMY, -2.4, e.phase);
   }
   for (const m of missiles) put(m.p, PT_MISSILE, 1.9, game.time);
+  for (const b of ebullets) put(b.p, PT_BULLET, b.kind ? -1.6 : 1.3, game.time);
   const showJet = game.state !== 'title' ? (game.camMode !== 1 && plane.alive) : plane.alive;
   if (showJet) {
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
@@ -2103,6 +3121,28 @@ function drawPoints(n) {
   gl.disable(gl.BLEND);
 }
 
+/* ---------- cannon tracers ---------- */
+function drawTracers() {
+  const n = Math.min(tracers.length, TRACER_MAX);
+  if (n <= 0) return;
+  for (let i = 0; i < n; i++) {
+    const t = tracers[tracers.length - 1 - i], o = i * 6;
+    tracerData[o] = t.a[0]; tracerData[o + 1] = t.a[1]; tracerData[o + 2] = t.a[2];
+    tracerData[o + 3] = t.b[0]; tracerData[o + 4] = t.b[1]; tracerData[o + 5] = t.b[2];
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, tracerVbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, tracerData.subarray(0, n * 6));
+  gl.useProgram(tracerProg);
+  gl.uniformMatrix4fv(U(tracerProg, 'uVP'), false, vpM);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.bindVertexArray(tracerVao);
+  gl.drawArrays(gl.LINES, 0, n * 2);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 function fillParticles(list, batch, glowMode) {
   const d = batch.data;
   let n = 0;
@@ -2112,7 +3152,6 @@ function fillParticles(list, batch, glowMode) {
     let a = glowMode ? Math.min(1, t * 1.5) : t * p.a;
     if (a <= 0.01) continue;
     const s = p.size;
-    // Billboard corners reach s*sqrt(2) from the centre; 1.5s is conservative.
     if (!sphereInFrustum(p.p[0], p.p[1], p.p[2], s * 1.5)) continue;
     let o = n * 60;
     for (let k = 0; k < 6; k++) {
@@ -2180,11 +3219,12 @@ function renderScene() {
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
-  drawDrones();
+  drawEnemies();
   drawClouds();
 
   const pn = buildPoints();
   drawPoints(pn);
+  drawTracers();
   const sc = fillParticles(smokeP, smokeBatch, false);
   drawParticleBatch(smokeBatch, sc, smokeTex, false);
   const gc = fillParticles(glowP, glowBatch, true);
@@ -2198,19 +3238,34 @@ function renderScene() {
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, sceneTex);
   gl.uniform1i(U(postProg, 'uScene'), 0);
+  gl.uniform1f(U(postProg, 'uHurt'), clamp(game.hitFlash * 0.55 + (plane.alive ? 0 : 0.35), 0, 1));
   gl.bindVertexArray(fsVao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 </script>
 <script>
 /* DUSK PATROL — hud.js
-   The 2D overlay: title, flight HUD, warnings, lock box, pause and results.
-   Loaded as a classic script in order (see index.html); globals are shared. */
+   The 2D overlay: title, flight HUD, warnings, lock box, wave banner,
+   upgrade cards, pause and results. Loaded as a classic script in order
+   (see index.html); globals are shared. */
 'use strict';
 
 function pad(n, w) { return String(Math.max(0, Math.floor(n))).padStart(w, '0'); }
-function fmtTime(t) { const s = Math.ceil(Math.max(0, t)); return pad(Math.floor(s / 60), 2) + ':' + pad(s % 60, 2); }
 function blinkOn(rate) { return Math.sin(game.time * rate) > -0.2; }
+
+/* ---------- small widgets ---------- */
+// Horizontal gauge with a label, a value readout and an optional overheat tint.
+function drawGauge(x, y, w, h, frac, col, bg) {
+  hud.fillStyle = bg || 'rgba(8,6,16,0.55)';
+  hud.fillRect(x - 1, y - 1, w + 2, h + 2);
+  hud.fillStyle = 'rgba(242,230,208,0.12)';
+  hud.fillRect(x, y, w, h);
+  const fw = Math.round(w * clamp(frac, 0, 1));
+  if (fw > 0) {
+    hud.fillStyle = col;
+    hud.fillRect(x, y, fw, h);
+  }
+}
 
 function drawReticle() {
   hud.fillStyle = 'rgba(242,230,208,0.82)';
@@ -2220,45 +3275,55 @@ function drawReticle() {
   hud.fillRect(239, 134, 2, 1);
 }
 
+/* ---------- targets ---------- */
 function bestTarget() {
   const fwd = vnorm(vsub(cam.look, cam.pos));
   let best = null, bestDot = 0.55, bestDist = 1e9;
-  for (const d of drones) {
-    if (!d.alive) continue;
-    const to = vsub(d.pos, cam.pos), dist = vlen(to);
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const to = vsub(e.pos, cam.pos), dist = vlen(to);
     const dd = vdot(fwd, vmul(to, 1 / Math.max(dist, 0.001)));
-    if (dd > bestDot && dist < bestDist) { bestDot = dd; best = d; bestDist = dist; }
+    if (dd > bestDot && dist < bestDist) { bestDot = dd; best = e; bestDist = dist; }
   }
-  return best ? { d: best, dist: bestDist } : null;
+  return best ? { e: best, dist: bestDist } : null;
 }
 
-// Missile lock (red, "LOCK") wins over the nearest drone in view (amber).
 function drawTargetBox() {
   const lock = game.lock && game.lock.alive ? game.lock : null;
-  const t = lock ? { d: lock, dist: vdist(lock.pos, plane.pos) } : bestTarget();
+  const t = lock ? { e: lock, dist: vdist(lock.pos, plane.pos) } : bestTarget();
   if (!t) return;
-  const p = projPoint(vpM, t.d.pos);
+  const p = projPoint(vpM, t.e.pos);
   if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > H - 22) return;
-  const x = Math.round(p[0]), y = Math.round(p[1]), s = lock ? 6 : 7;
+  const x = Math.round(p[0]), y = Math.round(p[1]);
+  const boss = t.e.type === 'carrier';
+  const s = boss ? 12 : lock ? 6 : 7;
   hud.fillStyle = lock ? 'rgba(255,90,95,0.95)' : 'rgba(255,180,92,0.95)';
   hud.fillRect(x - s, y - s, 4, 1); hud.fillRect(x - s, y - s, 1, 4);
   hud.fillRect(x + s - 3, y - s, 4, 1); hud.fillRect(x + s, y - s, 1, 4);
   hud.fillRect(x - s, y + s, 4, 1); hud.fillRect(x - s, y + s - 3, 1, 4);
   hud.fillRect(x + s - 3, y + s, 4, 1); hud.fillRect(x + s, y + s - 3, 1, 4);
-  drawTextC((lock ? 'LOCK ' : 'DRONE ') + (t.dist / 1000).toFixed(1) + 'KM', x, y + 11, lock ? COL.red : COL.amber, 1, 0);
+  const label = (lock ? 'LOCK ' : t.e.def.name + ' ') + (t.dist / 1000).toFixed(1) + 'KM';
+  drawTextC(label, x, y + s + 3, lock ? COL.red : COL.amber, 1, 0);
+  // Health pips above the box for anything that survives one burst.
+  if (t.e.maxHp > 120) {
+    const f = clamp(t.e.hp / t.e.maxHp, 0, 1);
+    drawGauge(x - 12, y - s - 6, 24, 2, f, f > 0.5 ? '#ffb45c' : '#ff5a5f');
+  }
 }
 
 function drawOffscreenArrow() {
   if (!plane.alive) return;
   const cx = W / 2, cy = H / 2, margin = 22;
   let target = null, dist = 1e9;
-  for (const d of drones) {
-    if (!d.alive) continue;
-    const p = projPoint(vpM, d.pos);
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const p = projPoint(vpM, e.pos);
     const onScreen = p && p[0] > 14 && p[0] < W - 14 && p[1] > 24 && p[1] < H - 32;
     if (onScreen) continue;
-    const dd = vlen(vsub(d.pos, plane.pos));
-    if (dd < dist) { target = d; dist = dd; }
+    const dd = vlen(vsub(e.pos, plane.pos));
+    // The boss always wins the arrow, even when far away.
+    const score = e.type === 'carrier' ? dd * 0.25 : dd;
+    if (score < dist) { target = e; dist = score; }
   }
   if (!target) return;
   const px = target.pos[0], py = target.pos[1], pz = target.pos[2];
@@ -2266,9 +3331,9 @@ function drawOffscreenArrow() {
   const vy = viewM[1] * px + viewM[5] * py + viewM[9] * pz + viewM[13];
   const vz = viewM[2] * px + viewM[6] * py + viewM[10] * pz + viewM[14];
   let ax = vx * projM[0], ay = -vy * projM[5];
-  if (vz > 0) { ax = -ax; ay = -ay; } // behind the camera: point the way to turn
+  if (vz > 0) { ax = -ax; ay = -ay; }
   let m = Math.hypot(ax, ay);
-  if (m < 1e-3) { ax = 0; ay = 1; m = 1; } // exactly behind: point down
+  if (m < 1e-3) { ax = 0; ay = 1; m = 1; }
   ax /= m; ay /= m;
   const halfW = cx - margin, halfH = cy - margin;
   const t = Math.min(halfW / Math.max(Math.abs(ax), 1e-4), halfH / Math.max(Math.abs(ay), 1e-4));
@@ -2276,12 +3341,12 @@ function drawOffscreenArrow() {
   hud.save();
   hud.translate(ex, ey);
   hud.rotate(Math.atan2(ay, ax));
-  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  hud.fillStyle = target.type === 'carrier' ? 'rgba(255,90,95,0.95)' : 'rgba(255,180,92,0.95)';
   hud.beginPath();
   hud.moveTo(6, 0); hud.lineTo(-4, -5); hud.lineTo(-1, 0); hud.lineTo(-4, 5);
   hud.closePath(); hud.fill();
   hud.restore();
-  drawTextC((dist / 1000).toFixed(1) + 'KM',
+  drawTextC((vdist(target.pos, plane.pos) / 1000).toFixed(1) + 'KM',
     clamp(Math.round(ex - ax * 12), 26, W - 26),
     clamp(Math.round(ey - ay * 11), 22, H - 26), COL.amber, 1, 0);
 }
@@ -2291,47 +3356,89 @@ function drawPops() {
     const sp = projPoint(vpM, p.p);
     if (!sp) continue;
     hud.globalAlpha = clamp(p.t, 0, 1);
-    drawTextC(p.text, sp[0], sp[1] - 10, COL.amber, 1, 0);
+    drawTextC(p.text, sp[0], sp[1] - 10, p.col || COL.amber, 1, 0);
     hud.globalAlpha = 1;
   }
 }
 
+/* ---------- radar ---------- */
+// Top-down sweep centred on the jet; hostiles clamp to the rim when far.
+function drawRadar(cx, cy, r) {
+  hud.fillStyle = 'rgba(8,6,16,0.42)';
+  hud.beginPath(); hud.arc(cx, cy, r, 0, TAU); hud.fill();
+  hud.strokeStyle = 'rgba(242,230,208,0.22)';
+  hud.lineWidth = 1;
+  hud.beginPath(); hud.arc(cx, cy, r, 0, TAU); hud.stroke();
+  hud.beginPath(); hud.arc(cx, cy, r * 0.55, 0, TAU); hud.stroke();
+  hud.beginPath(); hud.moveTo(cx - r, cy); hud.lineTo(cx + r, cy); hud.moveTo(cx, cy - r); hud.lineTo(cx, cy + r); hud.stroke();
+
+  const range = 1500;
+  const fwd = flightForward();
+  const heading = Math.atan2(fwd[0], -fwd[2]);
+  const cos = Math.cos(-heading), sin = Math.sin(-heading);
+  hud.fillStyle = 'rgba(255,180,92,0.9)';
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    let dx = e.pos[0] - plane.pos[0], dz = e.pos[2] - plane.pos[2];
+    const rx = (dx * cos - dz * sin) / range;
+    const rz = (dx * sin + dz * cos) / range;
+    let px = cx + rx * r, py = cy + rz * r;
+    const d = Math.hypot(px - cx, py - cy);
+    const clamped = d > r - 2;
+    if (clamped) { px = cx + (px - cx) / d * (r - 2); py = cy + (py - cy) / d * (r - 2); }
+    hud.fillStyle = e.type === 'carrier' ? '#ff5a5f' : clamped ? 'rgba(255,180,92,0.45)' : '#ffb45c';
+    const s = e.type === 'carrier' ? 3 : 1;
+    hud.fillRect(Math.round(px - s / 2), Math.round(py - s / 2), s + (s === 1 ? 1 : 0), s + (s === 1 ? 1 : 0));
+  }
+  // The jet sits at the centre, pointing up.
+  hud.fillStyle = '#f2e6d0';
+  hud.beginPath(); hud.moveTo(cx, cy - 3); hud.lineTo(cx - 2, cy + 3); hud.lineTo(cx + 2, cy + 3); hud.closePath(); hud.fill();
+}
+
+/* ---------- title ---------- */
 function drawTitleScreen() {
-  hud.fillStyle = 'rgba(6,4,12,0.30)';
+  hud.fillStyle = 'rgba(6,4,12,0.32)';
   hud.fillRect(0, 0, W, H);
   const tw = textWidth('DUSK PATROL', 3, 2);
   const tx = Math.round((W - tw) / 2);
-  drawText('DUSK PATROL', tx + 2, 53, COL.dark, 3, 2);
-  drawText('DUSK PATROL', tx, 50, COL.amber, 3, 2);
+  drawText('DUSK PATROL', tx + 2, 40, COL.dark, 3, 2);
+  drawText('DUSK PATROL', tx, 37, COL.amber, 3, 2);
   hud.fillStyle = 'rgba(255,180,92,0.5)';
-  hud.fillRect(160, 104, 160, 1);
-  drawTextC('A PIXEL PATROL OVER THE COAST', 240, 112, COL.bone, 1, 0);
-  drawTextC('BEST  ' + pad(game.best, 6), 240, 126, COL.amber, 1, 0);
-  if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY', 240, 154, COL.bone, 1, 1);
+  hud.fillRect(160, 74, 160, 1);
+  drawTextC('ENDLESS WAVE CAMPAIGN', 240, 82, COL.bone, 1, 0);
+  drawTextC('BEST  ' + pad(game.best, 6) + '   WAVE  ' + campaign.bestWave, 240, 96, COL.amber, 1, 0);
+  if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY', 240, 122, COL.bone, 1, 1);
 
-  hud.fillStyle = 'rgba(8,6,16,0.42)';
-  hud.fillRect(96, 196, 288, 52);
+  hud.fillStyle = 'rgba(8,6,16,0.45)';
+  hud.fillRect(64, 146, 352, 96);
   hud.fillStyle = 'rgba(255,180,92,0.25)';
-  hud.fillRect(96, 196, 288, 1);
+  hud.fillRect(64, 146, 352, 1);
   if (touch.on) {
-    drawTextSh('LEFT STICK', 108, 204, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 210, 204, COL.bone, 1, 0);
-    drawTextSh('BOOST', 108, 216, COL.amber, 1, 0); drawTextSh('AFTERBURNER', 210, 216, COL.bone, 1, 0);
-    drawTextSh('FIRE', 108, 228, COL.amber, 1, 0); drawTextSh('MISSILE (HOLD)', 210, 228, COL.bone, 1, 0);
-    drawTextSh('ROLL', 268, 204, COL.amber, 1, 0); drawTextSh('BARREL', 306, 204, COL.bone, 1, 0);
-    drawTextSh('CAM', 268, 216, COL.amber, 1, 0); drawTextSh('VIEW', 306, 216, COL.bone, 1, 0);
-    drawTextSh('II', 268, 228, COL.amber, 1, 0); drawTextSh('PAUSE', 306, 228, COL.bone, 1, 0);
-    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS FOR A BIGGER VIEW' : 'SHOOT THE TRAINING DRONES OVER THE BAY', 240, 254, COL.dim, 1, 0);
+    drawTextSh('LEFT STICK', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
+    drawTextSh('FIRE', 76, 168, COL.amber, 1, 0); drawTextSh('HOLD: AUTOCANNON', 178, 168, COL.bone, 1, 0);
+    drawTextSh('MSL', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE LOCK', 178, 180, COL.bone, 1, 0);
+    drawTextSh('FLARE', 76, 192, COL.amber, 1, 0); drawTextSh('BREAK LOCK', 178, 192, COL.bone, 1, 0);
+    drawTextSh('BOOST', 262, 156, COL.amber, 1, 0); drawTextSh('AFTERBURNER', 322, 156, COL.bone, 1, 0);
+    drawTextSh('ROLL', 262, 168, COL.amber, 1, 0); drawTextSh('DODGE', 322, 168, COL.bone, 1, 0);
+    drawTextSh('CAM', 262, 180, COL.amber, 1, 0); drawTextSh('VIEW', 322, 180, COL.bone, 1, 0);
+    drawTextSh('II', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE', 322, 192, COL.bone, 1, 0);
+    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS' : 'CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
+    drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
     return;
   }
-  drawTextSh('WASD / ARROWS', 108, 204, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 210, 204, COL.bone, 1, 0);
-  drawTextSh('SHIFT / SPC', 108, 216, COL.amber, 1, 0); drawTextSh('BOOST', 210, 216, COL.bone, 1, 0);
-  drawTextSh('F', 108, 228, COL.amber, 1, 0); drawTextSh('MISSILE', 210, 228, COL.bone, 1, 0);
-  drawTextSh('C', 268, 204, COL.amber, 1, 0); drawTextSh('CAMERA', 288, 204, COL.bone, 1, 0);
-  drawTextSh('B', 268, 216, COL.amber, 1, 0); drawTextSh('BARREL ROLL', 288, 216, COL.bone, 1, 0);
-  drawTextSh('P / M', 268, 228, COL.amber, 1, 0); drawTextSh('PAUSE / MUTE', 306, 228, COL.bone, 1, 0);
-  drawTextC('1/2/3 VIEW  /  SHOOT THE TRAINING DRONES OVER THE BAY', 240, 254, COL.dim, 1, 0);
+  drawTextSh('WASD / ARROWS', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
+  drawTextSh('SPACE / LMB', 76, 168, COL.amber, 1, 0); drawTextSh('AUTOCANNON', 178, 168, COL.bone, 1, 0);
+  drawTextSh('F / RMB', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE', 178, 180, COL.bone, 1, 0);
+  drawTextSh('X', 76, 192, COL.amber, 1, 0); drawTextSh('FLARES', 178, 192, COL.bone, 1, 0);
+  drawTextSh('SHIFT', 262, 156, COL.amber, 1, 0); drawTextSh('BOOST', 322, 156, COL.bone, 1, 0);
+  drawTextSh('B', 262, 168, COL.amber, 1, 0); drawTextSh('BARREL ROLL', 322, 168, COL.bone, 1, 0);
+  drawTextSh('C / 1-3', 262, 180, COL.amber, 1, 0); drawTextSh('CAMERA', 322, 180, COL.bone, 1, 0);
+  drawTextSh('P / M / R', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE MUTE RETRY', 322, 192, COL.bone, 1, 0);
+  drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
+  drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
 }
 
+/* ---------- cockpit ---------- */
 function drawCockpitFrame() {
   hud.fillStyle = 'rgba(10,8,16,0.76)';
   hud.fillRect(0, 0, W, 3);
@@ -2365,32 +3472,79 @@ function drawCockpitProjector() {
   hud.restore();
 }
 
+/* ---------- flight HUD ---------- */
+function drawBars() {
+  const m = game.mods;
+  // Hull and shield, bottom-left.
+  drawTextSh('HULL ' + Math.ceil(game.hull), 8, 224, game.hull / m.hullMax > 0.3 ? COL.bone : COL.red, 1, 0);
+  drawGauge(8, 234, 78, 4, game.hull / m.hullMax, game.hull / m.hullMax > 0.3 ? '#5ee0d0' : '#ff5a5f');
+  drawGauge(8, 242, 78, 3, game.shield / m.shieldMax, '#5fa8ff');
+
+  // Heat, bottom-right, under the radar.
+  const heat = weapons.heat / 100;
+  const over = weapons.overheated;
+  drawTextR(over ? 'OVERHEAT' : 'HEAT', 472, 232, over ? COL.red : COL.dim, 1, 0);
+  drawGauge(394, 242, 78, 4, heat, over ? (blinkOn(14) ? '#ff5a5f' : '#ffb45c') : heat > 0.7 ? '#ffb45c' : '#f2e6d0');
+}
+
+function drawWaveInfo() {
+  drawTextSh('WAVE ' + campaign.wave, 8, 6, COL.amber, 1, 0);
+  const left = campaign.queue.length + aliveEnemies();
+  drawTextSh(campaign.bossWave ? 'BOSS' : left + ' LEFT', 8, 18, campaign.bossWave ? COL.red : COL.dim, 1, 0);
+  if (campaign.boss && campaign.boss.alive) {
+    const b = campaign.boss;
+    const f = clamp(b.hp / b.maxHp, 0, 1);
+    const w = 150;
+    drawGauge(Math.round(240 - w / 2), 32, w, 4, f, f > 0.5 ? '#ff8a5c' : '#ff5a5f', 'rgba(8,6,16,0.7)');
+    drawTextC('CARRIER', 240, 40, COL.red, 1, 0);
+  }
+}
+
+function drawWaveBanner() {
+  if (game.waveBanner <= 0) return;
+  const a = clamp(game.waveBanner / 0.5, 0, 1) * clamp((2.6 - game.waveBanner) / 0.25, 0, 1);
+  hud.globalAlpha = a;
+  if (campaign.bossWave) {
+    drawTextC('WARNING', 240, 88, COL.red, 2, 1);
+    drawTextC('CARRIER INBOUND', 240, 112, COL.red, 1, 1);
+  } else {
+    drawTextC('WAVE ' + campaign.wave, 240, 92, COL.amber, 2, 1);
+  }
+  hud.globalAlpha = 1;
+}
+
 function drawPlayHUD() {
   if (game.camMode === 1 && plane.alive) drawCockpitFrame();
   hud.fillStyle = 'rgba(8,6,16,0.34)';
   hud.fillRect(0, H - 14, W, 14);
 
   const camName = ['CHASE', 'FPV', 'CINEMA'][game.camMode];
-  drawTextSh('DP ' + camName + ' ' + (game.camMode + 1) + '/3', 8, 6, COL.dim, 1, 0);
-  const hurry = game.timer <= 10;
-  drawTextC(fmtTime(game.timer), 240, 4, hurry && blinkOn(6) ? COL.red : COL.amber, 2, 0);
-  drawTextR('SCORE ' + pad(game.score, 6), 472, 6, COL.bone, 1, 0);
+  drawTextSh('DP ' + camName, 8, 258, COL.dim, 1, 0);
 
-  drawTextSh('SPD ' + pad(plane.speed * 1.94, 3), 8, 258, COL.amber, 1, 0);
-  drawTextSh('ALT ' + pad(plane.pos[1], 4), 86, 258, COL.bone, 1, 0);
-  drawTextR('MSL ' + mslAmmo + '/8', 472, 258, mslAmmo ? COL.bone : COL.red, 1, 0);
+  drawWaveInfo();
+  drawTextC(pad(game.score, 6), 240, 2, COL.amber, 2, 0);
+  if (game.combo > 1) {
+    drawTextC('X' + game.combo + ' COMBO', 240, 20, blinkOn(10) ? COL.amber : COL.bone, 1, 0);
+  }
+  drawTextR('BEST ' + pad(game.best, 6), 472, 6, COL.dim, 1, 0);
+  drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax, 472, 18, weapons.ammo ? COL.bone : COL.red, 1, 0);
+  drawTextR('FLR ' + weapons.flares, 472, 30, weapons.flares ? COL.bone : COL.dim, 1, 0);
+  const ready = weapons.rollCd <= 0;
+  hud.fillStyle = ready ? 'rgba(255,180,92,0.9)' : 'rgba(242,230,208,0.25)';
+  hud.fillRect(462, 31, ready ? 10 : Math.round(10 * (1 - weapons.rollCd / game.mods.rollCd)), 2);
+
+  drawBars();
+  drawRadar(W - 40, H - 66, 27);
 
   if (plane.alive) {
-    // Warnings stack under the timer, most urgent first.
-    let wy = 28;
+    let wy = 46;
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);
-    // Upside down = the jet's up axis points at the ground (pitch or roll past 90°).
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
     if (camMat[5] < -0.3 && plane.barrelT <= 0) warn('INVERTED', COL.amber);
   }
-  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  P ' + Math.round(plane.pitch / DEG) + '  R ' + Math.round(plane.roll / DEG) + '  CH ' + game.visibleChunks + '/64', 8, 220, COL.dim, 1, 0);
+  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 216, COL.dim, 1, 0);
 
   drawReticle();
   if (game.camMode === 1 && plane.alive) drawCockpitProjector();
@@ -2398,44 +3552,153 @@ function drawPlayHUD() {
   drawOffscreenArrow();
 
   if (!plane.alive) {
-    drawTextC('CRASHED', 240, 108, COL.red, 2, 1);
-    drawTextC('RESPAWNING', 240, 140, COL.bone, 1, 1);
+    drawTextC(plane.dead ? 'HULL FAILURE' : 'CRASHED', 240, 108, COL.red, 2, 1);
+    drawTextC(plane.dead ? 'RUN ENDING' : 'RESPAWNING  -30 HULL', 240, 140, COL.bone, 1, 1);
   }
   drawPops();
+  drawWaveBanner();
 }
 
+/* ---------- upgrade cards ---------- */
+function upgradeCardRects() {
+  const w = 104, h = 96, gap = 12;
+  const total = w * 3 + gap * 2;
+  const x0 = Math.round((W - total) / 2);
+  const y = 96;
+  return [0, 1, 2].map(i => ({ x: x0 + i * (w + gap), y, w, h }));
+}
+
+function wrapText(str, maxChars) {
+  const words = str.split(' ');
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    if (!cur) cur = w;
+    else if ((cur + ' ' + w).length <= maxChars) cur += ' ' + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function drawUpgradeScreen() {
+  hud.fillStyle = 'rgba(6,4,12,0.72)';
+  hud.fillRect(0, 0, W, H);
+  drawTextC('WAVE ' + campaign.wave + ' CLEARED', 240, 34, COL.amber, 2, 1);
+  drawTextC('+' + game.waveBonus + ' BONUS', 240, 58, COL.bone, 1, 0);
+  drawTextC('CHOOSE AN UPGRADE', 240, 76, COL.dim, 1, 0);
+
+  const rects = upgradeCardRects();
+  for (let i = 0; i < 3; i++) {
+    const r = rects[i], u = campaign.offers[i];
+    hud.fillStyle = 'rgba(14,11,24,0.94)';
+    hud.fillRect(r.x, r.y, r.w, r.h);
+    if (!u) {
+      hud.strokeStyle = 'rgba(242,230,208,0.15)';
+      hud.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+      drawTextC('---', r.x + r.w / 2, r.y + 44, COL.dim, 1, 0);
+      continue;
+    }
+    const taken = campaign.picks[u.id] || 0;
+    hud.strokeStyle = 'rgba(255,180,92,0.85)';
+    hud.lineWidth = 1;
+    hud.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+    hud.fillStyle = 'rgba(255,180,92,0.12)';
+    hud.fillRect(r.x + 1, r.y + 1, r.w - 2, 16);
+
+    drawTextC(String(i + 1), r.x + 10, r.y + 5, COL.amber, 1, 0);
+    const titleLines = wrapText(u.name, 12);
+    let ty = r.y + 6;
+    for (const line of titleLines) { drawTextC(line, r.x + r.w / 2 + 4, ty, COL.amber, 1, 0); ty += 11; }
+
+    const descLines = wrapText(u.desc, 15);
+    let dy = r.y + 38;
+    for (const line of descLines) { drawTextC(line, r.x + r.w / 2, dy, COL.bone, 1, 0); dy += 11; }
+
+    if (taken > 0) drawTextC('OWNED ' + taken + '/' + u.max, r.x + r.w / 2, r.y + r.h - 14, COL.dim, 1, 0);
+    else drawTextC('NEW', r.x + r.w / 2, r.y + r.h - 14, COL.dim, 1, 0);
+  }
+  drawTextC(touch.on ? 'TAP A CARD' : 'PRESS 1 / 2 / 3 TO INSTALL', 240, 210, blinkOn(3.2) ? COL.bone : COL.dim, 1, 0);
+  drawTextC('LOADOUT PERSISTS UNTIL YOU GO DOWN', 240, 226, COL.dim, 1, 0);
+}
+
+/* ---------- pause / results ---------- */
+function drawPauseScreen() {
+  drawPlayHUD();
+  hud.fillStyle = 'rgba(6,4,12,0.68)';
+  hud.fillRect(0, 0, W, H);
+  drawTextC('PAUSED', 240, 74, COL.amber, 2, 1);
+  drawTextC('WAVE ' + campaign.wave + '  ·  SCORE ' + pad(game.score, 6), 240, 100, COL.bone, 1, 0);
+  if (touch.on) {
+    drawTextC('TAP TO RESUME', 240, 128, COL.bone, 1, 0);
+  } else {
+    drawTextC('P TO RESUME', 240, 128, COL.bone, 1, 0);
+    drawTextC('R TO RESTART   M TO MUTE', 240, 142, COL.dim, 1, 0);
+    hud.fillStyle = 'rgba(255,180,92,0.3)';
+    hud.fillRect(112, 160, 256, 1);
+    drawTextC('SPACE CANNON   F MISSILE   X FLARES', 240, 174, COL.bone, 1, 0);
+    drawTextC('SHIFT BOOST   B BARREL ROLL   C VIEW', 240, 188, COL.bone, 1, 0);
+  }
+  // Current loadout summary.
+  let sx = 96, sy = 208;
+  drawTextC('LOADOUT', 240, 202, COL.dim, 1, 0);
+  const owned = Object.keys(campaign.picks);
+  if (!owned.length) drawTextC('NONE YET', 240, 216, COL.dim, 1, 0);
+  for (const id of owned) {
+    const u = UPGRADES.find(x => x.id === id);
+    if (!u) continue;
+    drawTextSh(u.name + ' ' + campaign.picks[id], sx, sy, COL.amber, 1, 0);
+    sx += 84;
+    if (sx > 380) { sx = 96; sy += 12; }
+  }
+}
+
+function drawResultsScreen() {
+  hud.fillStyle = 'rgba(6,4,12,0.62)';
+  hud.fillRect(0, 0, W, H);
+  drawTextC('MISSION END', 240, 28, COL.red, 2, 1);
+  hud.fillStyle = 'rgba(255,180,92,0.4)';
+  hud.fillRect(150, 56, 180, 1);
+
+  // Big grade letter on the left.
+  const g = game.grade;
+  const gcol = g === 'S' ? '#ffd75e' : g === 'A' ? '#ffb45c' : g === 'B' ? '#5ee0d0' : g === 'C' ? '#f2e6d0' : '#ff5a5f';
+  drawText('GRADE', 74, 70, COL.dim, 1, 0);
+  drawText(g, 74, 82, gcol, 4, 0);
+
+  const acc = game.missilesFired ? Math.round(game.missileHits / game.missilesFired * 100) : 0;
+  const rows = [
+    ['WAVE REACHED', String(campaign.cleared || campaign.wave)],
+    ['SCORE', pad(game.score, 6)],
+    ['BEST', pad(game.best, 6)],
+    ['KILLS', String(game.kills)],
+    ['MISSILE HIT', acc + '%'],
+    ['BEST COMBO', 'X' + game.bestCombo]
+  ];
+  let ry = 68;
+  for (const [k, v] of rows) {
+    drawTextSh(k, 176, ry, COL.dim, 1, 0);
+    drawTextR(v, 404, ry, COL.bone, 1, 0);
+    ry += 15;
+  }
+  if (game.newBest && game.score > 0) drawTextC('NEW BEST SCORE', 240, 162, COL.amber, 1, 0);
+  else drawTextC('BEST WAVE ' + campaign.bestWave, 240, 162, COL.dim, 1, 0);
+
+  hud.fillStyle = 'rgba(255,180,92,0.25)';
+  hud.fillRect(74, 176, 332, 1);
+  drawTextC('S: FLAWLESS   A: EXCELLENT   B: SOLID   C: SHAKY   D: SCRAMBLED', 240, 186, COL.dim, 1, 0);
+  if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY AGAIN' : 'PRESS ENTER TO FLY AGAIN', 240, 208, COL.bone, 1, 1);
+  drawTextC('R RESTARTS INSTANTLY', 240, 224, COL.dim, 1, 0);
+}
+
+/* ---------- entry ---------- */
 function renderHUD() {
   hud.clearRect(0, 0, W, H);
   if (game.state === 'title') drawTitleScreen();
   else if (game.state === 'play') drawPlayHUD();
-  else if (game.state === 'pause') {
-    drawPlayHUD();
-    hud.fillStyle = 'rgba(6,4,12,0.62)';
-    hud.fillRect(0, 0, W, H);
-    drawTextC('PAUSED', 240, 78, COL.amber, 2, 1);
-    if (touch.on) {
-      drawTextC('TAP TO RESUME', 240, 118, COL.bone, 1, 0);
-    } else {
-      drawTextC('P TO RESUME', 240, 118, COL.bone, 1, 0);
-      drawTextC('R TO RESTART   M TO MUTE', 240, 134, COL.dim, 1, 0);
-      hud.fillStyle = 'rgba(255,180,92,0.3)';
-      hud.fillRect(112, 154, 256, 1);
-      drawTextC('WASD FLY   SHIFT BOOST   F MISSILE', 240, 170, COL.bone, 1, 0);
-      drawTextC('C / 1-3 VIEW   B BARREL ROLL', 240, 186, COL.bone, 1, 0);
-    }
-  } else if (game.state === 'results') {
-    hud.fillStyle = 'rgba(6,4,12,0.55)';
-    hud.fillRect(0, 0, W, H);
-    drawTextC('PATROL COMPLETE', 240, 62, COL.amber, 2, 1);
-    hud.fillStyle = 'rgba(255,180,92,0.4)';
-    hud.fillRect(150, 92, 180, 1);
-    drawTextC('SCORE  ' + pad(game.score, 6), 240, 104, COL.bone, 1, 0);
-    drawTextC('BEST   ' + pad(game.best, 6), 240, 118, COL.amber, 1, 0);
-    const acc = game.shots ? Math.round(game.kills / game.shots * 100) : 0;
-    drawTextC('DRONES DOWN  ' + game.kills + '   HIT RATE  ' + acc + '%', 240, 134, COL.dim, 1, 0);
-    if (game.newBest && game.score > 0) drawTextC('NEW BEST', 240, 148, COL.amber, 1, 0);
-    if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY AGAIN' : 'PRESS ENTER TO FLY AGAIN', 240, 164, COL.bone, 1, 1);
-  }
+  else if (game.state === 'upgrade') drawUpgradeScreen();
+  else if (game.state === 'pause') drawPauseScreen();
+  else if (game.state === 'results') drawResultsScreen();
 }
 </script>
 <script>
@@ -2459,7 +3722,8 @@ function frame(now) {
 }
 document.addEventListener('visibilitychange', () => { lastT = performance.now(); });
 
-resetDrones();
+respawnPlane();
+plane.alive = true;
 updateTitlePlane();
 updateCamera(0.016);
 requestAnimationFrame(frame);

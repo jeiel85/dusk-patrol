@@ -28,8 +28,18 @@ window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
   if (!keys[k]) {
+    if (game.state === 'upgrade') {
+      if (k === 'Digit1') chooseUpgrade(0);
+      else if (k === 'Digit2') chooseUpgrade(1);
+      else if (k === 'Digit3') chooseUpgrade(2);
+      else if (k === 'Enter') chooseUpgrade(0);
+      else if (k === 'KeyP' || k === 'Escape') { /* no pause over the card screen */ }
+      keys[k] = true;
+      return;
+    }
     if (k === 'Enter') onEnter();
     else if (k === 'KeyF') fireMissile();
+    else if (k === 'KeyX') fireFlares();
     else if (k === 'KeyC') cycleCamera();
     else if (k === 'Digit1') setCamera(0);
     else if (k === 'Digit2') setCamera(1);
@@ -42,18 +52,37 @@ window.addEventListener('keydown', e => {
   keys[k] = true;
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
-glCanvas.addEventListener('pointerdown', e => {
-  if (e.pointerType !== 'mouse') return;
-  audio.init();
+
+function lockPointer() {
   if (game.state === 'play' && glCanvas.requestPointerLock) {
     try { glCanvas.requestPointerLock(); } catch (err) { }
   }
+}
+glCanvas.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse') return;
+  audio.init();
+  if (game.state === 'upgrade') {
+    // Clicking the card itself is handled by the HUD hit test below.
+    const hit = hudCardAt(e.clientX, e.clientY);
+    if (hit >= 0) chooseUpgrade(hit);
+    return;
+  }
+  if (e.button === 0) keys.Mouse0 = true;
+  if (e.button === 2) fireMissile();
+  lockPointer();
 });
+window.addEventListener('pointerup', e => {
+  if (e.pointerType === 'mouse' && e.button === 0) keys.Mouse0 = false;
+});
+glCanvas.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement === glCanvas) {
     mouseDX += e.movementX;
     mouseDY += e.movementY;
   }
+});
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== glCanvas) keys.Mouse0 = false;
 });
 // Leaving the tab or window mid-flight pauses instead of flying on unattended.
 function releaseInputs() {
@@ -63,6 +92,22 @@ function releaseInputs() {
 }
 window.addEventListener('blur', releaseInputs);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseInputs(); });
+
+/* ---------- upgrade card hit test ---------- */
+// The HUD draws three cards; this maps a click in CSS pixels to a card index.
+function hudCardAt(clientX, clientY) {
+  if (game.state !== 'upgrade') return -1;
+  const r = frameEl.getBoundingClientRect();
+  if (!r.width || !r.height) return -1;
+  const gx = (clientX - r.left) / r.width * W;
+  const gy = (clientY - r.top) / r.height * H;
+  const cards = upgradeCardRects();
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    if (gx >= c.x && gx <= c.x + c.w && gy >= c.y && gy <= c.y + c.h) return i;
+  }
+  return -1;
+}
 
 /* ---------- touch ---------- */
 // A floating stick on the left half (up = nose up, sideways = roll) and
@@ -94,8 +139,13 @@ window.addEventListener('pointerdown', e => {
   if (e.pointerType === 'mouse') return;
   touch.enable(true);
   audio.init();
-  // Taps outside the controls drive the menus: start, retry and resume.
+  // Taps outside the controls drive the menus: start, retry, resume, upgrade.
   if (e.target.closest('button') || e.target.closest('.zone')) return;
+  if (game.state === 'upgrade') {
+    const hit = hudCardAt(e.clientX, e.clientY);
+    if (hit >= 0) chooseUpgrade(hit);
+    return;
+  }
   if (game.state === 'title' || game.state === 'results' || game.state === 'pause') onEnter();
 });
 
@@ -132,8 +182,10 @@ for (const btn of touch.root.querySelectorAll('button')) {
     e.preventDefault();
     touch.capture(btn, e.pointerId);
     btn.classList.add('on');
-    if (act === 'fire') { touch.fire = true; fireMissile(); }
+    if (act === 'fire') touch.fire = true;
     else if (act === 'boost') touch.boost = true;
+    else if (act === 'msl') fireMissile();
+    else if (act === 'flare') fireFlares();
     else if (act === 'roll') startBarrel();
     else if (act === 'cam') cycleCamera();
     else if (act === 'pause') togglePause();

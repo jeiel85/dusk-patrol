@@ -18,7 +18,8 @@ function frame(now) {
 }
 document.addEventListener('visibilitychange', () => { lastT = performance.now(); });
 
-resetDrones();
+respawnPlane();
+plane.alive = true;
 updateTitlePlane();
 updateCamera(0.016);
 requestAnimationFrame(frame);
