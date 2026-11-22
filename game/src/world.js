@@ -123,13 +123,15 @@ function droneHome(i) {
   return [x, 110 + r() * 150, z];
 }
 
+// Height texture encoding shared with the water shader: tex = (h + BIAS) / RANGE.
+const HGT_BIAS = 60, HGT_RANGE = 720;
 function buildHeightData(size) {
   const data = new Uint8Array(size * size);
   for (let j = 0; j < size; j++) {
     const z = -HALF + (j + 0.5) / size * WORLD;
     for (let i = 0; i < size; i++) {
       const x = -HALF + (i + 0.5) / size * WORLD;
-      data[j * size + i] = clamp(terrainHeight(x, z) / 600, 0, 1) * 255;
+      data[j * size + i] = clamp((terrainHeight(x, z) + HGT_BIAS) / HGT_RANGE, 0, 1) * 255;
     }
   }
   return data;

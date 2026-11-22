@@ -76,8 +76,10 @@ uniform float uTime;
 void main(){
   vec2 uv = vW.xz/6000.0+0.5;
   float inside = step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0);
-  float h = texture(uHeight, clamp(uv,0.001,0.999)).r*600.0*inside;
-  float depth = max(h, 0.0);
+  // Terrain height, decoded from the biased 8-bit texture: -60 .. +660.
+  // Outside the map there is open ocean, so treat it as deep water.
+  float h = (texture(uHeight, clamp(uv,0.001,0.999)).r*720.0-60.0);
+  float depth = inside > 0.5 ? max(-h, 0.0) : 60.0;
 
   vec3 deep = vec3(0.010,0.105,0.20);
   vec3 shallow = vec3(0.14,0.50,0.52);
@@ -308,6 +310,7 @@ precision highp float;
 in vec2 vUV;
 out vec4 outColor;
 uniform sampler2D uScene;
+uniform float uHurt;
 float bayer2(vec2 a){ a=floor(a); return fract(a.x*0.5 + a.y*a.y*0.75); }
 float bayer4(vec2 a){ return bayer2(0.5*a)*0.25 + bayer2(a); }
 float bayer8(vec2 a){ return bayer4(0.5*a)*0.25 + bayer2(a); }
@@ -321,10 +324,25 @@ void main(){
   c *= vec3(1.05,1.0,0.97);
   vec2 d = vUV-0.5;
   c *= 1.0 - 0.30*pow(length(d)*1.45, 2.2);
+  // Damage flash: red edge burn that leaves the centre readable.
+  float edge = smoothstep(0.16, 0.62, length(d));
+  c = mix(c, vec3(0.62,0.05,0.07), uHurt * edge * 0.85);
+  c = mix(c, vec3(0.9,0.2,0.2), uHurt * 0.10);
   float bay = (bayer8(gl_FragCoord.xy) - 0.5) * 0.55;
   c = floor(c*10.0 + 0.5 + bay)/10.0;
   outColor = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
+
+// Cannon tracers: thin additive lines, faded at the muzzle end.
+const TRACER_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+uniform mat4 uVP;
+void main(){ gl_Position = uVP*vec4(aPos,1.0); }`;
+
+const TRACER_FS = `#version 300 es
+precision highp float;
+out vec4 outColor;
+void main(){ outColor = vec4(1.0, 0.82, 0.42, 0.9); }`;
 
 const skyProg = makeProg(FS_VS, SKY_FS, 'sky');
 const waterProg = makeProg(WATER_VS, WATER_FS, 'water');
@@ -335,6 +353,7 @@ const pointProg = makeProg(POINT_VS, POINT_FS, 'point');
 const partProg = makeProg(PART_VS, PART_FS, 'part');
 const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
 const postProg = makeProg(FS_VS, POST_FS, 'post');
+const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
 const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
 const FOG_COL = [0.80, 0.52, 0.44];
 const FOG_DENS = 0.00026;

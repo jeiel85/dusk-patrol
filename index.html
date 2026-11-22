@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DUSK PATROL — 픽셀 아트 전투기</title>
-<meta name="description" content="WebGL2로 만든 480×270 픽셀 아트 전투기 게임. 360도 루프, 조종석 1인칭, 120초 드론 격추. 설치 없이 브라우저에서 바로 플레이.">
+<title>DUSK PATROL — 무한 웨이브 픽셀 전투기</title>
+<meta name="description" content="WebGL2로 만든 480×270 픽셀 아트 전투기 게임. 무한 웨이브 캠페인, 5웨이브마다 항공모함 보스, 기관포·미사일·플레어·배럴 롤, 웨이브마다 고르는 강화 카드. 설치 없이 브라우저에서 바로 플레이.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="DUSK PATROL">
-<meta property="og:description" content="노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. PC는 키보드, 휴대폰은 터치로 즐기는 픽셀 아트 플라이트 액션.">
+<meta property="og:description" content="노을진 해안 도시 상공에서 적 부대를 지우고 강화를 고르세요. 5웨이브마다 항모 보스가 등장하는 무한 웨이브 픽셀 플라이트 액션.">
 <meta property="og:image" content="https://jeiel85.github.io/dusk-patrol/docs/cover.png">
 <meta property="og:image:width" content="960">
 <meta property="og:image:height" content="540">
@@ -63,7 +63,13 @@
   .btn.ghost{background:transparent;color:var(--bone);border-color:var(--line);box-shadow:none}
   .btn.ghost:hover{border-color:var(--teal);color:var(--teal)}
 
-  .demo-block{position:relative;padding-bottom:64px}
+  .features{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:8px 0 4px}
+  .feature{border:1px solid var(--line);background:rgba(12,10,22,.62);padding:16px 16px 18px}
+  .feature .idx{font:700 10px/1 var(--mono);letter-spacing:.2em;color:var(--amber)}
+  .feature h2{font:700 14px/1.3 var(--mono);letter-spacing:.06em;margin:10px 0 6px;color:var(--bone)}
+  .feature p{margin:0;color:#d8c7be;font-size:13px;line-height:1.55}
+
+  .demo-block{position:relative;padding:34px 0 64px}
   .demo-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;flex-wrap:wrap}
   .section-label{font:700 11px/1 var(--mono);letter-spacing:.32em;text-transform:uppercase;color:var(--amber);display:flex;align-items:center;gap:10px}
   .live-dot{width:7px;height:7px;background:var(--teal);box-shadow:0 0 10px var(--teal)}
@@ -106,6 +112,7 @@
 
   @media(max-width:760px){
     .hero{padding:46px 0 28px}
+    .features{grid-template-columns:repeat(2,1fr);gap:10px}
     .console-bar .spacer{display:none}
     .sky{padding-bottom:78px}
     .skyline{height:96px}
@@ -119,13 +126,19 @@
   <div class="skyline"></div>
   <div class="wrap">
     <div class="hero">
-      <div class="kicker">Pixel patrol / web arcade</div>
+      <div class="kicker">Pixel patrol / endless wave</div>
       <h1>DUSK<br>PATROL</h1>
-      <p class="lead">노을진 해안 도시 상공에서 120초간 드론 8대를 격추하세요. PC는 키보드, 휴대폰은 터치로 바로 플레이.</p>
+      <p class="lead">적 부대를 지우고, 강화를 골라, 더 높은 웨이브로 올라가세요. 5웨이브마다 항공모함 보스가 기다립니다. PC는 키보드, 휴대폰은 터치로 바로 플레이.</p>
       <div class="actions">
         <a class="btn" href="#demo">게임 바로 플레이 <span aria-hidden="true">↓</span></a>
         <a class="btn ghost" href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">소스 코드 ↗</a>
       </div>
+    </div>
+    <div class="features">
+      <div class="feature"><div class="idx">01 / CAMPAIGN</div><h2>무한 웨이브</h2><p>끝없이 밀려오는 드론·인터셉터·건십. 웨이브를 비우면 보너스 점수와 강화 카드를 받습니다.</p></div>
+      <div class="feature"><div class="idx">02 / BOSS</div><h2>항모 보스</h2><p>5웨이브마다 호위기를 이끈 항공모함이 등장합니다. 피탄량이 줄면 탄막과 드론 투입이 거세집니다.</p></div>
+      <div class="feature"><div class="idx">03 / COMBAT</div><h2>4종 무기</h2><p>열 관리 기관포, 락온 미사일, 유도탄을 끊는 플레어, 무적으로 회피하는 배럴 롤.</p></div>
+      <div class="feature"><div class="idx">04 / BUILD</div><h2>강화 &amp; 등급</h2><p>11종 강화 중 매 웨이브 1개를 선택. 선체·실드·콤보·명중률로 S~D 등급을 받습니다.</p></div>
     </div>
   </div>
 </header>
@@ -133,21 +146,21 @@
 <main>
   <div class="wrap demo-block" id="demo">
     <div class="demo-head">
-      <div class="section-label">Live demo</div>
+      <div class="section-label"><span class="live-dot"></span> Live demo</div>
       <button class="fs-btn" id="fullscreen" type="button">전체 화면 ⛶</button>
     </div>
     <div class="console" id="console">
       <div class="console-bar">
-        <span>dusk_patrol — play in browser</span>
+        <span>dusk_patrol — endless wave campaign</span>
         <span class="spacer"></span>
         <span>WebGL2 · 480×270</span>
       </div>
       <div class="screen">
-        <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
+        <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 무한 웨이브 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
       </div>
       <div class="demo-hint">
-        <span class="hint-keys">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>W</kbd><kbd>S</kbd> 기수 · <kbd>A</kbd><kbd>D</kbd> 선회 · <kbd>F</kbd> 미사일 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 시점</span>
-        <span class="hint-touch">화면을 탭해 시작 · 왼쪽 절반을 드래그해 조종 · <kbd>FIRE</kbd> 미사일 · <kbd>BOOST</kbd> 가속 · 전체 화면이나 가로 화면이 편합니다</span>
+        <span class="hint-keys">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>WASD</kbd> 비행 · <kbd>Space</kbd> 기관포 · <kbd>F</kbd> 미사일 · <kbd>X</kbd> 플레어 · <kbd>B</kbd> 롤 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 강화 선택</span>
+        <span class="hint-touch">화면을 탭해 시작 · 왼쪽 절반을 드래그해 조종 · <kbd>FIRE</kbd> 기관포 · <kbd>MSL</kbd> 미사일 · <kbd>FLR</kbd> 플레어 · <kbd>ROLL</kbd> 회피 · 전체 화면이나 가로 화면이 편합니다</span>
       </div>
     </div>
   </div>
