@@ -96,6 +96,19 @@ const audio = {
   flare() {
     this.burst(0.7, 1800, 0.7, 0.20, 300, 'highpass');
   },
+  roll() {
+    this.burst(0.38, 1650, 1.3, 0.14, 340, 'bandpass');
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(520, t);
+    o.frequency.exponentialRampToValueAtTime(980, t + 0.12);
+    o.frequency.exponentialRampToValueAtTime(640, t + 0.28);
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.32);
+  },
   overheat() {
     if (!this.ctx) return;
     const ctx = this.ctx, t = ctx.currentTime;
