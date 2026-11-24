@@ -24,7 +24,7 @@ function resetWeapons() {
 /* ---------- muzzle helpers ---------- */
 const _wMat = m4();
 function muzzlePoint(side) {
-  planeMatrix(_wMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  planeMatrix(_wMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   const right = [_wMat[0], _wMat[1], _wMat[2]];
   const up = [_wMat[4], _wMat[5], _wMat[6]];
   const fwd = flightForward();
@@ -184,13 +184,21 @@ function fireFlares() {
 }
 
 /* ---------- barrel roll dodge ---------- */
-function startBarrel() {
+let lastBarrelDir = 1;
+function startBarrel(dir) {
   if (game.state !== 'play' || !plane.alive) return;
   if (weapons.rollCd > 0 || plane.barrelT > 0) { audio.beep(180); return; }
-  plane.barrelT = 0.72;
+  if (!dir) {
+    if (Math.abs(plane.inRoll) > 0.12) dir = plane.inRoll > 0 ? 1 : -1;
+    else { dir = lastBarrelDir; lastBarrelDir = -lastBarrelDir; }
+  }
+  plane.barrelDir = dir;
+  plane.barrelDur = 0.48;
+  plane.barrelT = plane.barrelDur;
   weapons.rollCd = game.mods.rollCd;
-  plane.evade = Math.max(plane.evade || 0, 0.55);
-  audio.beep(880);
+  plane.evade = Math.max(plane.evade || 0, 0.58);
+  game.shake = Math.max(game.shake, 0.14);
+  audio.roll();
 }
 
 function updateWeapons(dt) {

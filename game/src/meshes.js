@@ -96,7 +96,7 @@ function makeCloudTexture(seed) {
     const nx = x / S, ny = y / S;
     let f = 0;
     for (const b of blobs) {
-      const dx = (nx - b[0]) * 1.45, dy = (ny - b[1]) * 2.5;
+      const dx = (nx - b[0]) * 1.40, dy = (ny - b[1]) * 2.05;
       f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
     }
     f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
@@ -175,10 +175,10 @@ attr(5, 3, 40, 28, 1); // wall colour
 gl.bindVertexArray(null);
 
 /* ---------- jet ---------- */
-const JET_LIGHT = rgb('#c3cee2'), JET_MID = rgb('#8e9ab6'), JET_DARK = rgb('#5b647d');
-const JET_WING = rgb('#b0bcd4'), JET_WING_BOT = rgb('#606a82'), JET_EDGE = rgb('#dce4f0');
-const JET_FIN = rgb('#525b73'), JET_CANOPY = rgb('#263b5c'), JET_CANOPY_HI = rgb('#6d9cbb');
-const JET_ORANGE = rgb('#e57b45');
+const JET_LIGHT = rgb('#aebad4'), JET_MID = rgb('#5b6884'), JET_DARK = rgb('#2b3246');
+const JET_WING = rgb('#3f4a64'), JET_WING_BOT = rgb('#252c3e'), JET_EDGE = rgb('#d6e0f2');
+const JET_FIN = rgb('#2f374d'), JET_CANOPY = rgb('#1b3254'), JET_CANOPY_HI = rgb('#79c2e8');
+const JET_ORANGE = rgb('#ff5b2e'), JET_GOLD = rgb('#ff9b42');
 
 const jet = new MeshBuilder();
 function ringPts(z, rx, ry, y0) {
@@ -239,9 +239,20 @@ function buildWing(sign) {
     );
   }
   jet.quad(
-    [sign * 4.35, 0.075, 1.55], [sign * 4.35, 0.075, 2.1],
-    [sign * 4.95, 0.075, 2.15], [sign * 4.95, 0.075, 1.5],
+    [sign * 4.25, 0.08, 1.50], [sign * 4.25, 0.08, 2.15],
+    [sign * 4.95, 0.08, 2.15], [sign * 4.95, 0.08, 1.48],
     JET_ORANGE, [0, 1, 0]
+  );
+  // Bold squadron wing stripe so banking flashes vividly from Chase & Overhead views.
+  jet.quad(
+    [sign * 1.55, 0.08, -0.75], [sign * 2.35, 0.08, -0.25],
+    [sign * 3.85, 0.08, 2.18], [sign * 2.95, 0.08, 2.52],
+    JET_ORANGE, [0, 1, 0]
+  );
+  jet.quad(
+    [sign * 1.55, -0.24, -0.75], [sign * 2.95, -0.24, 2.52],
+    [sign * 3.85, -0.24, 2.18], [sign * 2.35, -0.24, -0.25],
+    JET_GOLD, [0, -1, 0]
   );
 }
 buildWing(1); buildWing(-1);
@@ -257,6 +268,12 @@ function buildFin(sign) {
     );
   }
   jet.quad(p0, p1, [p2[0] - sign * 0.04, 1.75, 4.95], [p3[0] - sign * 0.04, 1.75, 3.95], JET_EDGE, [sign, 0.3, 0]);
+  // Tail fin tip accent.
+  jet.quad(
+    [0.86 * sign, 1.48, 3.82], [0.86 * sign, 1.48, 4.90],
+    [0.98 * sign, 1.75, 4.95], [0.98 * sign, 1.75, 3.95],
+    JET_ORANGE, [sign, 0.25, 0]
+  );
 }
 buildFin(1); buildFin(-1);
 
@@ -322,15 +339,19 @@ drone.tri([0, 1.05, 0], [1.6, 0.86, -1.2], [-1.6, 0.86, -1.2], JET_ORANGE, [0, 1
 const droneMesh = drone.build();
 
 /* ---------- afterburner cones ---------- */
-// Two cones behind the nozzles; each vertex is x, y, z (0 = nozzle, 1 = tip), t.
+// Two dual-layer cones behind the nozzles (outer flame + inner white-hot core).
 const burnData = [];
 for (const cx of [0.44, -0.44]) {
-  const cy = 0.02, r = 0.27, segs = 9;
-  for (let i = 0; i < segs; i++) {
-    const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
-    burnData.push(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0, 0,
-      cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0, 0,
-      cx, cy, 1, 1);
+  const cy = 0.02, segs = 10;
+  for (const [r, len] of [[0.34, 1.0], [0.18, 0.58]]) {
+    for (let i = 0; i < segs; i++) {
+      const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
+      burnData.push(
+        cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0, 0,
+        cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0, 0,
+        cx, cy, len, 1
+      );
+    }
   }
 }
 const burnCount = burnData.length / 4;
@@ -339,6 +360,36 @@ gl.bindVertexArray(burnVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(burnData)));
 attr(0, 3, 16, 0);
 attr(1, 1, 16, 12);
+gl.bindVertexArray(null);
+
+/* ---------- ground/water shadow geometry ---------- */
+const cloudShadowVao = gl.createVertexArray();
+gl.bindVertexArray(cloudShadowVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
+  -1, 0, -1, 0, 0,  1, 0, -1, 1, 0,  1, 0, 1, 1, 1,
+  -1, 0, -1, 0, 0,  1, 0, 1, 1, 1,  -1, 0, 1, 0, 1
+])));
+attr(0, 3, 20, 0);
+attr(1, 2, 20, 12);
+gl.bindVertexArray(null);
+
+// Flat fighter silhouette in XZ plane for projected jet shadow.
+const jetShadowData = new Float32Array([
+  // Fuselage dart
+  0, 0, -7.4, 0, 0,  -0.95, 0, 4.9, 0, 0,  0.95, 0, 4.9, 0, 0,
+  // Left wing
+  -0.5, 0, -1.5, 0, 0,  -4.95, 0, 1.6, 0, 0,  -0.5, 0, 3.1, 0, 0,
+  // Right wing
+  0.5, 0, -1.5, 0, 0,  0.5, 0, 3.1, 0, 0,  4.95, 0, 1.6, 0, 0,
+  // Tail stabilizers
+  0, 0, 3.0, 0, 0,  -2.8, 0, 4.6, 0, 0,  2.8, 0, 4.6, 0, 0
+]);
+const jetShadowCount = jetShadowData.length / 5;
+const jetShadowVao = gl.createVertexArray();
+gl.bindVertexArray(jetShadowVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(jetShadowData));
+attr(0, 3, 20, 0);
+attr(1, 2, 20, 12);
 gl.bindVertexArray(null);
 
 /* ---------- puff textures ---------- */
@@ -377,3 +428,7 @@ function makeParticleVAO(max) {
 }
 const smokeBatch = makeParticleVAO(240);
 const glowBatch = makeParticleVAO(260);
+// Wingtip contrail ribbons: up to 160 quads of 6 verts x (pos3 + rgba4).
+const TRAIL_QUAD_MAX = 160;
+const { vao: trailVao, vbo: trailVbo, data: trailData } =
+  makeDynamic(TRAIL_QUAD_MAX * 42, [[0, 3], [1, 4]]);

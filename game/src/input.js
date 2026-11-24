@@ -24,6 +24,7 @@ resize();
    ============================================================ */
 const keys = Object.create(null);
 let mouseDX = 0, mouseDY = 0;
+let lastTapKey = '', lastTapT = 0;
 window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
@@ -37,6 +38,17 @@ window.addEventListener('keydown', e => {
       keys[k] = true;
       return;
     }
+    if (game.state === 'play' && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
+      const side = (k === 'KeyA' || k === 'ArrowLeft') ? 'L' : 'R';
+      const now = performance.now();
+      if (lastTapKey === side && now - lastTapT < 240) {
+        startBarrel(side === 'L' ? 1 : -1);
+        lastTapKey = '';
+      } else {
+        lastTapKey = side;
+        lastTapT = now;
+      }
+    }
     if (k === 'Enter') onEnter();
     else if (k === 'KeyF') fireMissile();
     else if (k === 'KeyX') fireFlares();
@@ -44,6 +56,7 @@ window.addEventListener('keydown', e => {
     else if (k === 'Digit1') setCamera(0);
     else if (k === 'Digit2') setCamera(1);
     else if (k === 'Digit3') setCamera(2);
+    else if (k === 'Digit4') setCamera(3);
     else if (k === 'KeyB') startBarrel();
     else if (k === 'KeyM') audio.toggle();
     else if (k === 'KeyP' || k === 'Escape') togglePause();

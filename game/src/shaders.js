@@ -99,9 +99,24 @@ void main(){
   float spec = pow(max(dot(n,H),0.0), 110.0);
   col += vec3(1.0,0.74,0.46) * spec * 1.35;
 
-  float foamBand = 1.0 - smoothstep(0.4, 7.0, depth);
+  // Pixel-crisp animated ocean wave glints / sparkles (inspired by retro 3D flight art).
+  vec2 wcell = floor(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
+  vec2 wfrac = fract(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
+  float wh = fract(sin(dot(wcell, vec2(127.1, 311.7))) * 43758.5453);
+  float twinkle = 0.5 + 0.5 * sin(t * 2.6 + wh * 42.0);
+  float glint = step(0.84, wh) * step(0.45, twinkle)
+              * step(0.28, wfrac.x) * step(wfrac.x, 0.72)
+              * step(0.38, wfrac.y) * step(wfrac.y, 0.62);
+  float distFade = 1.0 - smoothstep(420.0, 2200.0, length(vW - uCam));
+  col = mix(col, vec3(0.95, 0.90, 0.84), glint * 0.58 * distFade);
+
+  // Dual-band animated coastal surf foam.
+  float foamInner = 1.0 - smoothstep(0.3, 5.5, depth);
+  float foamWave = sin(depth * 1.15 - t * 2.4 + q.x * 1.5) * 0.5 + 0.5;
+  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.62, 0.90, foamWave);
   float fnoise = 0.5+0.5*sin(q.x*4.0+q.y*3.0+t*1.3);
-  col = mix(col, vec3(0.86,0.92,0.86), foamBand*(0.22+fnoise*0.55));
+  float foam = clamp(foamInner * (0.35 + fnoise * 0.58) + foamOuter * 0.42, 0.0, 0.92);
+  col = mix(col, vec3(0.92,0.95,0.90), foam);
 
   float fog = 1.0-exp(-length(vW-uCam)*0.00027);
   col = mix(col, uFogColor, fog);
@@ -127,16 +142,23 @@ precision highp float;
 in vec3 vW, vN, vC;
 out vec4 outColor;
 uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
-uniform float uFogDensity, uSpec;
+uniform float uFogDensity, uSpec, uContour;
 void main(){
   vec3 N = normalize(vN), V = normalize(uCam-vW);
   float ndl = max(dot(N,uSun),0.0);
   float wrap = max((dot(N,uSun)+0.25)/1.25, 0.0);
-  vec3 col = vC*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
+  vec3 base = vC;
+  if (uContour > 0.5 && vW.y > 4.0) {
+    // Stylized retro elevation contour lines on hills and ridges.
+    float band = fract(vW.y / 18.0);
+    float line = 1.0 - smoothstep(0.0, 0.10, band);
+    base *= 1.0 - line * 0.16;
+  }
+  vec3 col = base*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
   vec3 H = normalize(uSun+V);
   col += uSunColor * pow(max(dot(N,H),0.0), 36.0) * uSpec;
   float rim = pow(1.0-max(dot(N,V),0.0), 3.0);
-  col += uSunColor * rim * 0.05;
+  col += uSunColor * rim * 0.07;
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
   outColor = vec4(col,1.0);
@@ -299,10 +321,49 @@ in float vT;
 out vec4 outColor;
 uniform float uIntensity, uTime;
 void main(){
-  float flick = 0.72 + 0.28*sin(vT*38.0 - uTime*44.0);
-  float a = pow(1.0-vT, 1.5)*flick*uIntensity;
-  vec3 col = mix(vec3(1.0,0.96,0.82), vec3(1.0,0.30,0.04), pow(vT,0.7));
+  float flick = 0.78 + 0.22*sin(vT*42.0 - uTime*56.0);
+  float shock = 0.85 + 0.15*sin(vT*24.0 - uTime*32.0);
+  float a = pow(1.0-vT, 1.25)*flick*uIntensity;
+  vec3 hot = vec3(1.0, 0.98, 0.86);
+  vec3 mid = vec3(1.0, 0.62, 0.14);
+  vec3 tail = vec3(0.98, 0.22, 0.04);
+  vec3 col = vT < 0.35 ? mix(hot, mid, vT/0.35) : mix(mid, tail, (vT-0.35)/0.65);
+  col *= shock;
   outColor = vec4(col, a);
+}`;
+
+// Wingtip contrail ribbons: crisp curving vapor trails.
+const TRAIL_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec4 aCol;
+uniform mat4 uVP;
+out vec4 vCol;
+void main(){ vCol = aCol; gl_Position = uVP * vec4(aPos, 1.0); }`;
+
+const TRAIL_FS = `#version 300 es
+precision highp float;
+in vec4 vCol;
+out vec4 outColor;
+void main(){ outColor = vCol; }`;
+
+// Ground/water projected shadows for clouds and aircraft silhouettes.
+const SHADOW_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUV;
+uniform mat4 uVP, uModel;
+out vec2 vUV;
+void main(){ vUV = aUV; gl_Position = uVP * uModel * vec4(aPos, 1.0); }`;
+
+const SHADOW_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 outColor;
+uniform sampler2D uTex;
+uniform float uAlpha, uUseTex;
+void main(){
+  float m = uUseTex > 0.5 ? texture(uTex, vUV).a : 1.0;
+  if (m < 0.45) discard;
+  outColor = vec4(0.03, 0.05, 0.14, uAlpha * m);
 }`;
 
 const POST_FS = `#version 300 es
@@ -354,6 +415,8 @@ const partProg = makeProg(PART_VS, PART_FS, 'part');
 const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
 const postProg = makeProg(FS_VS, POST_FS, 'post');
 const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
+const trailProg = makeProg(TRAIL_VS, TRAIL_FS, 'trail');
+const shadowProg = makeProg(SHADOW_VS, SHADOW_FS, 'shadow');
 const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
 const FOG_COL = [0.80, 0.52, 0.44];
 const FOG_DENS = 0.00026;

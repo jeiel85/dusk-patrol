@@ -27,7 +27,8 @@ function drawSky() {
 }
 
 const SOLID_SUN = [1.0, 0.78, 0.50], SOLID_AMB = [0.44, 0.42, 0.64];
-const JET_SUN = [1.0, 0.80, 0.55], JET_AMB = [0.58, 0.56, 0.74];
+const JET_SUN = [1.0, 0.84, 0.60], JET_AMB = [0.60, 0.58, 0.76];
+const shadowM = m4();
 function beginSolid() {
   gl.useProgram(solidProg);
   gl.uniformMatrix4fv(U(solidProg, 'uVP'), false, vpM);
@@ -38,10 +39,12 @@ function beginSolid() {
   gl.uniform1f(U(solidProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(solidProg, 'uCam'), cam.pos);
   gl.uniform1f(U(solidProg, 'uSpec'), 0.0);
+  gl.uniform1f(U(solidProg, 'uContour'), 0.0);
 }
 
 function drawTerrain() {
   beginSolid();
+  gl.uniform1f(U(solidProg, 'uContour'), 1.0);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, IDENT);
   updateFrustum(vpM);
   game.visibleChunks = 0;
@@ -82,14 +85,73 @@ function drawCity() {
   gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, buildings.length);
 }
 
+function drawShadows() {
+  gl.useProgram(shadowProg);
+  gl.uniformMatrix4fv(U(shadowProg, 'uVP'), false, vpM);
+  gl.uniform1i(U(shadowProg, 'uTex'), 0);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+
+  // Projected cloud shadows on sea / coastal plains.
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindVertexArray(cloudShadowVao);
+  gl.uniform1f(U(shadowProg, 'uUseTex'), 1.0);
+  for (const c of cloudDefs) {
+    const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    const off = Math.min(c.y * 0.65, 220);
+    const sx = cx - SUN_DIR[0] * off;
+    const sz = c.z - SUN_DIR[2] * off;
+    const gh = terrainHeight(sx, sz);
+    if (gh > 42) continue;
+    const sy = Math.max(gh, 0) + 0.55;
+    const rad = c.sx * 0.92;
+    if (!sphereInFrustum(sx, sy, sz, rad)) continue;
+    const dist = Math.hypot(sx - cam.pos[0], sy - cam.pos[1], sz - cam.pos[2]);
+    if (dist > 2800) continue;
+    const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
+    if (alpha < 0.02) continue;
+    m4id(shadowM);
+    shadowM[0] = rad; shadowM[10] = c.sy * 1.45;
+    shadowM[12] = sx; shadowM[13] = sy; shadowM[14] = sz;
+    gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
+    gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
+    gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  // Player jet shadow projected cleanly onto the water or ground below.
+  if (plane.alive && plane.agl < 420) {
+    const shift = Math.min(plane.agl * 0.45, 95);
+    const jx = plane.pos[0] - SUN_DIR[0] * shift;
+    const jz = plane.pos[2] - SUN_DIR[2] * shift;
+    const jy = Math.max(terrainHeight(jx, jz), 0) + 0.78;
+    const sc = 1.05 + clamp(plane.agl / 300, 0, 0.85);
+    const bankScale = Math.max(0.28, Math.abs(Math.cos(planeVisualRoll())));
+    const alpha = clamp(0.46 * (1 - plane.agl / 420), 0.06, 0.46);
+    m4rotY(shadowM, plane.yaw);
+    shadowM[0] *= sc * bankScale; shadowM[2] *= sc * bankScale;
+    shadowM[8] *= sc; shadowM[10] *= sc;
+    shadowM[12] = jx; shadowM[13] = jy; shadowM[14] = jz;
+    gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
+    gl.uniform1f(U(shadowProg, 'uUseTex'), 0.0);
+    gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
+    gl.bindVertexArray(jetShadowVao);
+    gl.drawArrays(gl.TRIANGLES, 0, jetShadowCount);
+  }
+
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 function drawJet() {
-  const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   beginSolid();
   // Blink the hull while respawn invulnerability is running.
   const inv = plane.invuln > 0 && (Math.sin(game.time * 26) > 0);
   gl.uniform3fv(U(solidProg, 'uAmbient'), inv ? [0.75, 0.95, 1.0] : JET_AMB);
   gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
-  gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
+  gl.uniform1f(U(solidProg, 'uSpec'), 0.65);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
   gl.bindVertexArray(jetMesh.vao);
   gl.drawArrays(gl.TRIANGLES, 0, jetMesh.count);
@@ -97,15 +159,70 @@ function drawJet() {
   gl.useProgram(burnProg);
   gl.uniformMatrix4fv(U(burnProg, 'uVP'), false, vpM);
   gl.uniformMatrix4fv(U(burnProg, 'uModel'), false, m);
-  gl.uniform1f(U(burnProg, 'uLen'), 2.6 + plane.boost * 7.5);
+  gl.uniform1f(U(burnProg, 'uLen'), 2.5 + plane.boost * 4.5 + plane.gLoad * 0.6);
   gl.uniform1f(U(burnProg, 'uZ0'), 4.9);
-  gl.uniform1f(U(burnProg, 'uIntensity'), 0.28 + plane.boost * 0.92);
+  gl.uniform1f(U(burnProg, 'uIntensity'), 0.56 + plane.boost * 0.85);
   gl.uniform1f(U(burnProg, 'uTime'), game.time);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
   gl.depthMask(false);
   gl.bindVertexArray(burnVao);
   gl.drawArrays(gl.TRIANGLES, 0, burnCount);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
+function drawTrails() {
+  let q = 0;
+  for (let s = 0; s < 2; s++) {
+    const tr = wingTrails[s];
+    if (tr.length < 2) continue;
+    for (let i = 0; i < tr.length - 1; i++) {
+      if (q >= TRAIL_QUAD_MAX) break;
+      const a = tr[i], b = tr[i + 1];
+      const ta = clamp(1 - a.age / 1.35, 0, 1);
+      const tb = clamp(1 - b.age / 1.35, 0, 1);
+      if (ta <= 0.01 && tb <= 0.01) continue;
+      // Camera-facing ribbon cross axis so trails stay crisp in Chase, Overhead & Cinema.
+      const tx = b.p[0] - a.p[0], ty = b.p[1] - a.p[1], tz = b.p[2] - a.p[2];
+      const vx = cam.pos[0] - a.p[0], vy = cam.pos[1] - a.p[1], vz = cam.pos[2] - a.p[2];
+      const distA = Math.hypot(vx, vy, vz);
+      const distB = Math.hypot(cam.pos[0] - b.p[0], cam.pos[1] - b.p[1], cam.pos[2] - b.p[2]);
+      const nearA = smoothstep(5.5, 13.0, distA);
+      const nearB = smoothstep(5.5, 13.0, distB);
+      if (nearA <= 0.01 && nearB <= 0.01) continue;
+      let sx = ty * vz - tz * vy, sy = tz * vx - tx * vz, sz = tx * vy - ty * vx;
+      const sl = Math.hypot(sx, sy, sz) || 1;
+      sx /= sl; sy /= sl; sz /= sl;
+      // Scale ribbon width gently when far (Overhead view) while keeping close chase trails razor-crisp.
+      const farScale = clamp(distA / 48, 0.75, 2.4);
+      const wa = a.w * farScale * (0.35 + 0.65 * ta), wb = b.w * farScale * (0.35 + 0.65 * tb);
+      const aa = a.a * ta * ta * nearA, ab = b.a * tb * tb * nearB;
+      const ax0 = a.p[0] - sx * wa, ay0 = a.p[1] - sy * wa, az0 = a.p[2] - sz * wa;
+      const ax1 = a.p[0] + sx * wa, ay1 = a.p[1] + sy * wa, az1 = a.p[2] + sz * wa;
+      const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
+      const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
+      let o = q * 42;
+      const putV = (x, y, z, al) => {
+        trailData[o] = x; trailData[o + 1] = y; trailData[o + 2] = z;
+        trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = al;
+        o += 7;
+      };
+      putV(ax0, ay0, az0, aa); putV(ax1, ay1, az1, aa); putV(bx1, by1, bz1, ab);
+      putV(ax0, ay0, az0, aa); putV(bx1, by1, bz1, ab); putV(bx0, by0, bz0, ab);
+      q++;
+    }
+  }
+  if (q <= 0) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, trailVbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, trailData.subarray(0, q * 42));
+  gl.useProgram(trailProg);
+  gl.uniformMatrix4fv(U(trailProg, 'uVP'), false, vpM);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.bindVertexArray(trailVao);
+  gl.drawArrays(gl.TRIANGLES, 0, q * 6);
   gl.depthMask(true);
   gl.disable(gl.BLEND);
 }
@@ -157,17 +274,13 @@ function drawClouds() {
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
-    const dx = cam.pos[0] - cx, dy = cam.pos[1] - c.y, dz = cam.pos[2] - c.z;
-    const dl = Math.hypot(dx, dy, dz) || 1;
-    let rx = dz / dl, rz = -dx / dl;
-    let rl = Math.hypot(rx, rz);
-    if (rl < 0.01) { rx = 1; rz = 0; rl = 1; } else { rx /= rl; rz /= rl; }
-    cloudM[0] = rx * c.sx; cloudM[1] = 0; cloudM[2] = rz * c.sx; cloudM[3] = 0;
-    cloudM[4] = 0; cloudM[5] = c.sy; cloudM[6] = 0; cloudM[7] = 0;
+    // Spherical billboarding keeps clouds volumetric from Overhead, Chase and Cockpit views.
+    cloudM[0] = camRight[0] * c.sx; cloudM[1] = camRight[1] * c.sx; cloudM[2] = camRight[2] * c.sx; cloudM[3] = 0;
+    cloudM[4] = camUp[0] * c.sy;    cloudM[5] = camUp[1] * c.sy;    cloudM[6] = camUp[2] * c.sy;    cloudM[7] = 0;
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    tint[0] = 1.0; tint[1] = c.tintY; tint[2] = 0.68;
+    tint[0] = 1.0; tint[1] = c.tintY + 0.08; tint[2] = 0.78;
     gl.uniform3fv(U(cloudProg, 'uTint'), tint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -201,7 +314,7 @@ function buildPoints() {
   for (const b of ebullets) put(b.p, PT_BULLET, b.kind ? -1.6 : 1.3, game.time);
   const showJet = game.state !== 'title' ? (game.camMode !== 1 && plane.alive) : plane.alive;
   if (showJet) {
-    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
     for (let i = 0; i < 3; i++) {
       ptLeft[i] = plane.pos[i] + camMat[i] * 4.9;
       ptRight[i] = plane.pos[i] - camMat[i] * 4.9;
@@ -325,11 +438,13 @@ function renderScene() {
 
   drawTerrain();
   drawWater();
+  drawShadows();
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
   drawEnemies();
   drawClouds();
+  if (showJet || game.state === 'title') drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);

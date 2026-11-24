@@ -559,9 +559,24 @@ void main(){
   float spec = pow(max(dot(n,H),0.0), 110.0);
   col += vec3(1.0,0.74,0.46) * spec * 1.35;
 
-  float foamBand = 1.0 - smoothstep(0.4, 7.0, depth);
+  // Pixel-crisp animated ocean wave glints / sparkles (inspired by retro 3D flight art).
+  vec2 wcell = floor(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
+  vec2 wfrac = fract(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
+  float wh = fract(sin(dot(wcell, vec2(127.1, 311.7))) * 43758.5453);
+  float twinkle = 0.5 + 0.5 * sin(t * 2.6 + wh * 42.0);
+  float glint = step(0.84, wh) * step(0.45, twinkle)
+              * step(0.28, wfrac.x) * step(wfrac.x, 0.72)
+              * step(0.38, wfrac.y) * step(wfrac.y, 0.62);
+  float distFade = 1.0 - smoothstep(420.0, 2200.0, length(vW - uCam));
+  col = mix(col, vec3(0.95, 0.90, 0.84), glint * 0.58 * distFade);
+
+  // Dual-band animated coastal surf foam.
+  float foamInner = 1.0 - smoothstep(0.3, 5.5, depth);
+  float foamWave = sin(depth * 1.15 - t * 2.4 + q.x * 1.5) * 0.5 + 0.5;
+  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.62, 0.90, foamWave);
   float fnoise = 0.5+0.5*sin(q.x*4.0+q.y*3.0+t*1.3);
-  col = mix(col, vec3(0.86,0.92,0.86), foamBand*(0.22+fnoise*0.55));
+  float foam = clamp(foamInner * (0.35 + fnoise * 0.58) + foamOuter * 0.42, 0.0, 0.92);
+  col = mix(col, vec3(0.92,0.95,0.90), foam);
 
   float fog = 1.0-exp(-length(vW-uCam)*0.00027);
   col = mix(col, uFogColor, fog);
@@ -587,16 +602,23 @@ precision highp float;
 in vec3 vW, vN, vC;
 out vec4 outColor;
 uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
-uniform float uFogDensity, uSpec;
+uniform float uFogDensity, uSpec, uContour;
 void main(){
   vec3 N = normalize(vN), V = normalize(uCam-vW);
   float ndl = max(dot(N,uSun),0.0);
   float wrap = max((dot(N,uSun)+0.25)/1.25, 0.0);
-  vec3 col = vC*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
+  vec3 base = vC;
+  if (uContour > 0.5 && vW.y > 4.0) {
+    // Stylized retro elevation contour lines on hills and ridges.
+    float band = fract(vW.y / 18.0);
+    float line = 1.0 - smoothstep(0.0, 0.10, band);
+    base *= 1.0 - line * 0.16;
+  }
+  vec3 col = base*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
   vec3 H = normalize(uSun+V);
   col += uSunColor * pow(max(dot(N,H),0.0), 36.0) * uSpec;
   float rim = pow(1.0-max(dot(N,V),0.0), 3.0);
-  col += uSunColor * rim * 0.05;
+  col += uSunColor * rim * 0.07;
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
   outColor = vec4(col,1.0);
@@ -759,10 +781,49 @@ in float vT;
 out vec4 outColor;
 uniform float uIntensity, uTime;
 void main(){
-  float flick = 0.72 + 0.28*sin(vT*38.0 - uTime*44.0);
-  float a = pow(1.0-vT, 1.5)*flick*uIntensity;
-  vec3 col = mix(vec3(1.0,0.96,0.82), vec3(1.0,0.30,0.04), pow(vT,0.7));
+  float flick = 0.78 + 0.22*sin(vT*42.0 - uTime*56.0);
+  float shock = 0.85 + 0.15*sin(vT*24.0 - uTime*32.0);
+  float a = pow(1.0-vT, 1.25)*flick*uIntensity;
+  vec3 hot = vec3(1.0, 0.98, 0.86);
+  vec3 mid = vec3(1.0, 0.62, 0.14);
+  vec3 tail = vec3(0.98, 0.22, 0.04);
+  vec3 col = vT < 0.35 ? mix(hot, mid, vT/0.35) : mix(mid, tail, (vT-0.35)/0.65);
+  col *= shock;
   outColor = vec4(col, a);
+}`;
+
+// Wingtip contrail ribbons: crisp curving vapor trails.
+const TRAIL_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec4 aCol;
+uniform mat4 uVP;
+out vec4 vCol;
+void main(){ vCol = aCol; gl_Position = uVP * vec4(aPos, 1.0); }`;
+
+const TRAIL_FS = `#version 300 es
+precision highp float;
+in vec4 vCol;
+out vec4 outColor;
+void main(){ outColor = vCol; }`;
+
+// Ground/water projected shadows for clouds and aircraft silhouettes.
+const SHADOW_VS = `#version 300 es
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec2 aUV;
+uniform mat4 uVP, uModel;
+out vec2 vUV;
+void main(){ vUV = aUV; gl_Position = uVP * uModel * vec4(aPos, 1.0); }`;
+
+const SHADOW_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 outColor;
+uniform sampler2D uTex;
+uniform float uAlpha, uUseTex;
+void main(){
+  float m = uUseTex > 0.5 ? texture(uTex, vUV).a : 1.0;
+  if (m < 0.45) discard;
+  outColor = vec4(0.03, 0.05, 0.14, uAlpha * m);
 }`;
 
 const POST_FS = `#version 300 es
@@ -814,6 +875,8 @@ const partProg = makeProg(PART_VS, PART_FS, 'part');
 const burnProg = makeProg(BURN_VS, BURN_FS, 'burn');
 const postProg = makeProg(FS_VS, POST_FS, 'post');
 const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
+const trailProg = makeProg(TRAIL_VS, TRAIL_FS, 'trail');
+const shadowProg = makeProg(SHADOW_VS, SHADOW_FS, 'shadow');
 const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
 const FOG_COL = [0.80, 0.52, 0.44];
 const FOG_DENS = 0.00026;
@@ -917,7 +980,7 @@ function makeCloudTexture(seed) {
     const nx = x / S, ny = y / S;
     let f = 0;
     for (const b of blobs) {
-      const dx = (nx - b[0]) * 1.45, dy = (ny - b[1]) * 2.5;
+      const dx = (nx - b[0]) * 1.40, dy = (ny - b[1]) * 2.05;
       f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
     }
     f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
@@ -996,10 +1059,10 @@ attr(5, 3, 40, 28, 1); // wall colour
 gl.bindVertexArray(null);
 
 /* ---------- jet ---------- */
-const JET_LIGHT = rgb('#c3cee2'), JET_MID = rgb('#8e9ab6'), JET_DARK = rgb('#5b647d');
-const JET_WING = rgb('#b0bcd4'), JET_WING_BOT = rgb('#606a82'), JET_EDGE = rgb('#dce4f0');
-const JET_FIN = rgb('#525b73'), JET_CANOPY = rgb('#263b5c'), JET_CANOPY_HI = rgb('#6d9cbb');
-const JET_ORANGE = rgb('#e57b45');
+const JET_LIGHT = rgb('#aebad4'), JET_MID = rgb('#5b6884'), JET_DARK = rgb('#2b3246');
+const JET_WING = rgb('#3f4a64'), JET_WING_BOT = rgb('#252c3e'), JET_EDGE = rgb('#d6e0f2');
+const JET_FIN = rgb('#2f374d'), JET_CANOPY = rgb('#1b3254'), JET_CANOPY_HI = rgb('#79c2e8');
+const JET_ORANGE = rgb('#ff5b2e'), JET_GOLD = rgb('#ff9b42');
 
 const jet = new MeshBuilder();
 function ringPts(z, rx, ry, y0) {
@@ -1060,9 +1123,20 @@ function buildWing(sign) {
     );
   }
   jet.quad(
-    [sign * 4.35, 0.075, 1.55], [sign * 4.35, 0.075, 2.1],
-    [sign * 4.95, 0.075, 2.15], [sign * 4.95, 0.075, 1.5],
+    [sign * 4.25, 0.08, 1.50], [sign * 4.25, 0.08, 2.15],
+    [sign * 4.95, 0.08, 2.15], [sign * 4.95, 0.08, 1.48],
     JET_ORANGE, [0, 1, 0]
+  );
+  // Bold squadron wing stripe so banking flashes vividly from Chase & Overhead views.
+  jet.quad(
+    [sign * 1.55, 0.08, -0.75], [sign * 2.35, 0.08, -0.25],
+    [sign * 3.85, 0.08, 2.18], [sign * 2.95, 0.08, 2.52],
+    JET_ORANGE, [0, 1, 0]
+  );
+  jet.quad(
+    [sign * 1.55, -0.24, -0.75], [sign * 2.95, -0.24, 2.52],
+    [sign * 3.85, -0.24, 2.18], [sign * 2.35, -0.24, -0.25],
+    JET_GOLD, [0, -1, 0]
   );
 }
 buildWing(1); buildWing(-1);
@@ -1078,6 +1152,12 @@ function buildFin(sign) {
     );
   }
   jet.quad(p0, p1, [p2[0] - sign * 0.04, 1.75, 4.95], [p3[0] - sign * 0.04, 1.75, 3.95], JET_EDGE, [sign, 0.3, 0]);
+  // Tail fin tip accent.
+  jet.quad(
+    [0.86 * sign, 1.48, 3.82], [0.86 * sign, 1.48, 4.90],
+    [0.98 * sign, 1.75, 4.95], [0.98 * sign, 1.75, 3.95],
+    JET_ORANGE, [sign, 0.25, 0]
+  );
 }
 buildFin(1); buildFin(-1);
 
@@ -1143,15 +1223,19 @@ drone.tri([0, 1.05, 0], [1.6, 0.86, -1.2], [-1.6, 0.86, -1.2], JET_ORANGE, [0, 1
 const droneMesh = drone.build();
 
 /* ---------- afterburner cones ---------- */
-// Two cones behind the nozzles; each vertex is x, y, z (0 = nozzle, 1 = tip), t.
+// Two dual-layer cones behind the nozzles (outer flame + inner white-hot core).
 const burnData = [];
 for (const cx of [0.44, -0.44]) {
-  const cy = 0.02, r = 0.27, segs = 9;
-  for (let i = 0; i < segs; i++) {
-    const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
-    burnData.push(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0, 0,
-      cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0, 0,
-      cx, cy, 1, 1);
+  const cy = 0.02, segs = 10;
+  for (const [r, len] of [[0.34, 1.0], [0.18, 0.58]]) {
+    for (let i = 0; i < segs; i++) {
+      const a0 = i / segs * TAU, a1 = (i + 1) / segs * TAU;
+      burnData.push(
+        cx + Math.cos(a0) * r, cy + Math.sin(a0) * r, 0, 0,
+        cx + Math.cos(a1) * r, cy + Math.sin(a1) * r, 0, 0,
+        cx, cy, len, 1
+      );
+    }
   }
 }
 const burnCount = burnData.length / 4;
@@ -1160,6 +1244,36 @@ gl.bindVertexArray(burnVao);
 gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array(burnData)));
 attr(0, 3, 16, 0);
 attr(1, 1, 16, 12);
+gl.bindVertexArray(null);
+
+/* ---------- ground/water shadow geometry ---------- */
+const cloudShadowVao = gl.createVertexArray();
+gl.bindVertexArray(cloudShadowVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(new Float32Array([
+  -1, 0, -1, 0, 0,  1, 0, -1, 1, 0,  1, 0, 1, 1, 1,
+  -1, 0, -1, 0, 0,  1, 0, 1, 1, 1,  -1, 0, 1, 0, 1
+])));
+attr(0, 3, 20, 0);
+attr(1, 2, 20, 12);
+gl.bindVertexArray(null);
+
+// Flat fighter silhouette in XZ plane for projected jet shadow.
+const jetShadowData = new Float32Array([
+  // Fuselage dart
+  0, 0, -7.4, 0, 0,  -0.95, 0, 4.9, 0, 0,  0.95, 0, 4.9, 0, 0,
+  // Left wing
+  -0.5, 0, -1.5, 0, 0,  -4.95, 0, 1.6, 0, 0,  -0.5, 0, 3.1, 0, 0,
+  // Right wing
+  0.5, 0, -1.5, 0, 0,  0.5, 0, 3.1, 0, 0,  4.95, 0, 1.6, 0, 0,
+  // Tail stabilizers
+  0, 0, 3.0, 0, 0,  -2.8, 0, 4.6, 0, 0,  2.8, 0, 4.6, 0, 0
+]);
+const jetShadowCount = jetShadowData.length / 5;
+const jetShadowVao = gl.createVertexArray();
+gl.bindVertexArray(jetShadowVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(jetShadowData));
+attr(0, 3, 20, 0);
+attr(1, 2, 20, 12);
 gl.bindVertexArray(null);
 
 /* ---------- puff textures ---------- */
@@ -1198,6 +1312,10 @@ function makeParticleVAO(max) {
 }
 const smokeBatch = makeParticleVAO(240);
 const glowBatch = makeParticleVAO(260);
+// Wingtip contrail ribbons: up to 160 quads of 6 verts x (pos3 + rgba4).
+const TRAIL_QUAD_MAX = 160;
+const { vao: trailVao, vbo: trailVbo, data: trailData } =
+  makeDynamic(TRAIL_QUAD_MAX * 42, [[0, 3], [1, 4]]);
 </script>
 <script>
 /* DUSK PATROL — meshes2.js
@@ -1929,7 +2047,7 @@ function resetWeapons() {
 /* ---------- muzzle helpers ---------- */
 const _wMat = m4();
 function muzzlePoint(side) {
-  planeMatrix(_wMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  planeMatrix(_wMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   const right = [_wMat[0], _wMat[1], _wMat[2]];
   const up = [_wMat[4], _wMat[5], _wMat[6]];
   const fwd = flightForward();
@@ -2089,13 +2207,21 @@ function fireFlares() {
 }
 
 /* ---------- barrel roll dodge ---------- */
-function startBarrel() {
+let lastBarrelDir = 1;
+function startBarrel(dir) {
   if (game.state !== 'play' || !plane.alive) return;
   if (weapons.rollCd > 0 || plane.barrelT > 0) { audio.beep(180); return; }
-  plane.barrelT = 0.72;
+  if (!dir) {
+    if (Math.abs(plane.inRoll) > 0.12) dir = plane.inRoll > 0 ? 1 : -1;
+    else { dir = lastBarrelDir; lastBarrelDir = -lastBarrelDir; }
+  }
+  plane.barrelDir = dir;
+  plane.barrelDur = 0.48;
+  plane.barrelT = plane.barrelDur;
   weapons.rollCd = game.mods.rollCd;
-  plane.evade = Math.max(plane.evade || 0, 0.55);
-  audio.beep(880);
+  plane.evade = Math.max(plane.evade || 0, 0.58);
+  game.shake = Math.max(game.shake, 0.14);
+  audio.roll();
 }
 
 function updateWeapons(dt) {
@@ -2149,6 +2275,7 @@ resize();
    ============================================================ */
 const keys = Object.create(null);
 let mouseDX = 0, mouseDY = 0;
+let lastTapKey = '', lastTapT = 0;
 window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
@@ -2162,6 +2289,17 @@ window.addEventListener('keydown', e => {
       keys[k] = true;
       return;
     }
+    if (game.state === 'play' && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
+      const side = (k === 'KeyA' || k === 'ArrowLeft') ? 'L' : 'R';
+      const now = performance.now();
+      if (lastTapKey === side && now - lastTapT < 240) {
+        startBarrel(side === 'L' ? 1 : -1);
+        lastTapKey = '';
+      } else {
+        lastTapKey = side;
+        lastTapT = now;
+      }
+    }
     if (k === 'Enter') onEnter();
     else if (k === 'KeyF') fireMissile();
     else if (k === 'KeyX') fireFlares();
@@ -2169,6 +2307,7 @@ window.addEventListener('keydown', e => {
     else if (k === 'Digit1') setCamera(0);
     else if (k === 'Digit2') setCamera(1);
     else if (k === 'Digit3') setCamera(2);
+    else if (k === 'Digit4') setCamera(3);
     else if (k === 'KeyB') startBarrel();
     else if (k === 'KeyM') audio.toggle();
     else if (k === 'KeyP' || k === 'Escape') togglePause();
@@ -2432,6 +2571,19 @@ const audio = {
   flare() {
     this.burst(0.7, 1800, 0.7, 0.20, 300, 'highpass');
   },
+  roll() {
+    this.burst(0.38, 1650, 1.3, 0.14, 340, 'bandpass');
+    if (!this.ctx) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(520, t);
+    o.frequency.exponentialRampToValueAtTime(980, t + 0.12);
+    o.frequency.exponentialRampToValueAtTime(640, t + 0.28);
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.32);
+  },
   overheat() {
     if (!this.ctx) return;
     const ctx = this.ctx, t = ctx.currentTime;
@@ -2514,15 +2666,61 @@ try { game.best = parseInt(localStorage.getItem('duskPatrolBest') || '0', 10) ||
 
 const START = [coastX(1060) - 160, 205, 1060];
 const plane = {
-  pos: START.slice(), yaw: 0, pitch: 0, roll: 0, barrel: 0, barrelT: 0,
+  pos: START.slice(), yaw: 0, pitch: 0, roll: 0, rollPunch: 0,
+  barrel: 0, barrelT: 0, barrelDur: 0.48, barrelDir: 1,
   speed: 175, boost: 0, alive: true, respawn: 0, throttle: 0.62, agl: 200, edge: 0,
-  inPitch: 0, inYaw: 0, inRoll: 0, evade: 0, vel: [0, 0, 0], invuln: 0
+  inPitch: 0, inYaw: 0, inRoll: 0, bankVel: 0, gLoad: 0,
+  evade: 0, vel: [0, 0, 0], invuln: 0
 };
-const cam = { pos: [0, 0, 0], look: [0, 0, 1], up: [0, 1, 0], snap: true };
+const cam = {
+  pos: [0, 0, 0], look: [0, 0, 1], up: [0, 1, 0], fov: 62,
+  snap: true, transT: 0, sway: 0, cockpitX: 0, cockpitY: 0
+};
 const camMat = m4(), viewM = m4(), projM = m4(), vpM = m4();
 
 const missiles = [], smokeP = [], glowP = [], pops = [], tracers = [];
+const TRAIL_MAX = 72;
+const wingTrails = [[], []];
+let trailSampleT = 0;
 const BOUNDARY = 6200, BOUNDARY_WARN = 5400;
+
+function planeVisualRoll() { return plane.roll + plane.rollPunch + plane.barrel; }
+function clearTrails() { wingTrails[0].length = 0; wingTrails[1].length = 0; trailSampleT = 0; }
+function updateTrails(dt) {
+  for (let s = 0; s < 2; s++) {
+    const tr = wingTrails[s];
+    for (let i = tr.length - 1; i >= 0; i--) {
+      tr[i].age += dt;
+      if (tr[i].age > 1.35) tr.splice(i, 1);
+    }
+  }
+  if (!plane.alive) return;
+  trailSampleT -= dt;
+  if (trailSampleT > 0) return;
+  trailSampleT = 0.016;
+  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
+  const rx = camMat[0], ry = camMat[1], rz = camMat[2];
+  const ux = camMat[4], uy = camMat[5], uz = camMat[6];
+  const fx = -camMat[8], fy = -camMat[9], fz = -camMat[10];
+  const gFactor = clamp(Math.abs(plane.inRoll) * 0.95 + Math.abs(plane.bankVel) * 0.25 + Math.abs(plane.inPitch) * 0.65 + (plane.barrelT > 0 ? 1.0 : 0) + plane.boost * 0.75, 0, 1.2);
+  const w = 0.08 + Math.min(1, gFactor) * 0.07;
+  const alpha = 0.42 + Math.min(1, gFactor) * 0.48;
+  for (let s = 0; s < 2; s++) {
+    const sign = s === 0 ? 1 : -1;
+    const tr = wingTrails[s];
+    tr.push({
+      p: [
+        plane.pos[0] + rx * (4.92 * sign) - fx * 2.05,
+        plane.pos[1] + ry * (4.92 * sign) - fy * 2.05,
+        plane.pos[2] + rz * (4.92 * sign) - fz * 2.05
+      ],
+      u: [ux, uy, uz],
+      r: [rx, ry, rz],
+      w, a: alpha, age: 0
+    });
+    if (tr.length > TRAIL_MAX) tr.shift();
+  }
+}
 
 function flightForward() {
   const cp = Math.cos(plane.pitch);
@@ -2652,13 +2850,15 @@ function crash(killed) {
 
 function respawnPlane() {
   plane.pos = START.slice();
-  plane.yaw = 0; plane.pitch = 0; plane.roll = 0;
-  plane.barrel = 0; plane.barrelT = 0;
+  plane.yaw = 0; plane.pitch = 0; plane.roll = 0; plane.rollPunch = 0;
+  plane.barrel = 0; plane.barrelT = 0; plane.barrelDir = 1;
+  plane.inPitch = 0; plane.inYaw = 0; plane.inRoll = 0; plane.bankVel = 0; plane.gLoad = 0;
   plane.speed = 175; plane.boost = 0; plane.alive = true;
   plane.invuln = 1.6; plane.evade = 0; plane.vel = [0, 0, 0];
   game.shield = game.mods.shieldMax;
   game.shieldT = 0;
-  cam.snap = true;
+  clearTrails();
+  cam.snap = true; cam.transT = 0; cam.sway = 0;
 }
 
 /* ---------- plane ---------- */
@@ -2675,33 +2875,48 @@ function updatePlane(dt) {
   if (plane.invuln > 0) plane.invuln -= dt;
 
   let pIn = ((keys.KeyW || keys.ArrowUp) ? 1 : 0) - ((keys.KeyS || keys.ArrowDown) ? 1 : 0) + touch.pitch;
-  let yIn = (keys.ArrowLeft ? 1 : 0) - (keys.ArrowRight ? 1 : 0);
-  let rIn = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0) + touch.roll;
-  pIn += clamp(-mouseDY * 0.035, -1, 1);
-  yIn += clamp(-mouseDX * 0.03, -1, 1);
-  mouseDX *= 0.86; mouseDY *= 0.86;
+  let steerIn = ((keys.KeyA || keys.ArrowLeft) ? 1 : 0) - ((keys.KeyD || keys.ArrowRight) ? 1 : 0) + touch.roll;
+  pIn += clamp(-mouseDY * 0.038, -1, 1);
+  steerIn += clamp(-mouseDX * 0.045, -1, 1);
+  mouseDX *= 0.84; mouseDY *= 0.84;
+  pIn = clamp(pIn, -1, 1);
+  steerIn = clamp(steerIn, -1, 1);
 
-  const k = 1 - Math.exp(-dt * 9);
-  plane.inPitch = lerp(plane.inPitch, clamp(pIn, -1, 1), k);
-  plane.inYaw = lerp(plane.inYaw, clamp(yIn, -1, 1), k);
-  plane.inRoll = lerp(plane.inRoll, clamp(rIn, -1, 1), k);
+  // Instant snap-reversal: counter-banking whips across much faster than holding one side.
+  const reversing = steerIn !== 0 && steerIn * plane.inRoll < -0.05;
+  const kPitch = 1 - Math.exp(-dt * 14);
+  const kSteer = 1 - Math.exp(-dt * (reversing ? 26 : 16));
+  plane.inPitch = lerp(plane.inPitch, pIn, kPitch);
+  plane.inRoll = lerp(plane.inRoll, steerIn, kSteer);
+  plane.inYaw = plane.inRoll;
 
   const turn = game.mods.turnMult;
-  plane.pitch = wrapAngle(plane.pitch + plane.inPitch * 1.5 * turn * dt);
-  plane.roll = wrapAngle(plane.roll + plane.inRoll * 3.0 * turn * dt);
-  if (Math.abs(rIn) < 0.02 && Math.abs(plane.inRoll) < 0.06) {
-    plane.roll = wrapAngle(plane.roll + Math.atan2(Math.sin(-plane.roll), Math.cos(-plane.roll)) * (1 - Math.exp(-dt * 1.05)));
-  }
-  const yawRate = plane.inYaw * 0.8 + Math.sin(plane.roll) * 1.12;
-  plane.yaw += yawRate * dt;
+  plane.pitch = wrapAngle(plane.pitch + plane.inPitch * 1.72 * turn * dt);
+
+  // High-G banked carving: quick lean into ~68 deg bank, crisp snap-level when released.
+  const prevRoll = plane.roll;
+  const maxBank = 1.18;
+  const targetRoll = plane.inRoll * maxBank;
+  const rollRate = Math.abs(steerIn) > 0.04 ? (reversing ? 19.5 : 13.5) : 7.6;
+  plane.roll = lerp(plane.roll, targetRoll, 1 - Math.exp(-dt * rollRate * Math.min(1.4, turn)));
+  plane.bankVel = (plane.roll - prevRoll) / Math.max(dt, 0.001);
+
+  // Elastic visual wing-snap overshoot makes left/right transitions feel razor-sharp.
+  const targetPunch = clamp(plane.bankVel * 0.032, -0.22, 0.22);
+  plane.rollPunch = lerp(plane.rollPunch, targetPunch, 1 - Math.exp(-dt * 16));
+
+  // Immediate coordinated yaw: direct authority on frame 1 + banked lift carve.
+  const yawRate = (plane.inRoll * 1.02 + Math.sin(plane.roll) * 1.48) * turn;
+  plane.yaw = wrapAngle(plane.yaw + yawRate * dt);
+  plane.gLoad = clamp(Math.abs(yawRate) * 0.55 + Math.abs(plane.inPitch) * 0.65, 0, 1.5);
 
   const boostKey = keys.ShiftLeft || keys.ShiftRight || touch.boost;
-  plane.boost = lerp(plane.boost, boostKey ? 1 : 0, 1 - Math.exp(-dt * 3.2));
+  plane.boost = lerp(plane.boost, boostKey ? 1 : 0, 1 - Math.exp(-dt * 6.2));
 
   const fwd = flightForward();
-  const target = (130 + plane.throttle * 85 + plane.boost * 145) * game.mods.speedMult;
-  plane.speed += (target - plane.speed) * dt * 0.7 - fwd[1] * 27 * dt;
-  plane.speed = clamp(plane.speed, 92, 395 * game.mods.speedMult);
+  const target = (138 + plane.throttle * 86 + plane.boost * 155) * game.mods.speedMult;
+  plane.speed += (target - plane.speed) * dt * 1.15 - fwd[1] * 26 * dt;
+  plane.speed = clamp(plane.speed, 95, 415 * game.mods.speedMult);
 
   plane.vel = vmul(fwd, plane.speed);
   plane.pos[0] += fwd[0] * plane.speed * dt;
@@ -2710,12 +2925,18 @@ function updatePlane(dt) {
 
   if (plane.barrelT > 0) {
     plane.barrelT -= dt;
-    const t = clamp(1 - plane.barrelT / 0.72, 0, 1);
-    plane.barrel = TAU * smoothstep(0, 1, t);
-    if (plane.barrelT <= 0) plane.barrel = 0;
+    const dur = plane.barrelDur || 0.48;
+    const t = clamp(1 - plane.barrelT / dur, 0, 1);
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    plane.barrel = plane.barrelDir * TAU * eased;
+    // Lateral evasive juke along horizontal wing axis during the barrel roll.
+    const juke = Math.sin(t * Math.PI) * 52 * dt * -plane.barrelDir;
+    plane.pos[0] += Math.cos(plane.yaw) * juke;
+    plane.pos[2] -= Math.sin(plane.yaw) * juke;
+    if (plane.barrelT <= 0) { plane.barrel = 0; plane.barrelT = 0; }
   }
 
-  if (plane.boost > 0.5) game.shake = Math.max(game.shake, 0.05);
+  if (plane.boost > 0.5) game.shake = Math.max(game.shake, 0.045);
   const gh = Math.max(terrainHeight(plane.pos[0], plane.pos[2]), 0);
   plane.agl = plane.pos[1] - gh;
   plane.edge = Math.max(Math.abs(plane.pos[0]), Math.abs(plane.pos[2]));
@@ -2730,47 +2951,76 @@ function updatePlane(dt) {
 }
 
 function updateTitlePlane() {
-  const a = game.time * 0.075, R = 780;
+  const a = game.time * 0.095, R = 780;
   plane.pos[0] = -60 + Math.cos(a) * R;
   plane.pos[2] = Math.sin(a) * R;
-  plane.pos[1] = 235 + Math.sin(game.time * 0.5) * 10;
+  plane.pos[1] = 228 + Math.sin(game.time * 0.6) * 12;
   plane.yaw = Math.PI - a;
-  plane.pitch = 0; plane.roll = 0.30; plane.speed = 210; plane.boost = 0.12;
+  plane.pitch = Math.cos(game.time * 0.6) * 0.06;
+  plane.roll = 0.48; plane.rollPunch = 0; plane.inRoll = 0.42; plane.bankVel = 0;
+  plane.speed = 215; plane.boost = 0.28 + 0.14 * Math.sin(game.time * 1.4);
 }
 
 /* ---------- camera ---------- */
-const CHASE_TAU = { pos: 0.12, look: 0.07, up: 0.10 };
+const CHASE_TAU = { pos: 0.10, look: 0.055, up: 0.09 };
 function updateCamera(dt) {
-  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  // Use base attitude (without barrel spin) for external cameras so barrel rolls spin dramatically in frame.
+  planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll);
+  const right = [camMat[0], camMat[1], camMat[2]];
   const up = [camMat[4], camMat[5], camMat[6]];
   const fwd = [-camMat[8], -camMat[9], -camMat[10]];
 
   let eye = null, look = null, upv = [0, 1, 0], fov = 62, snap = false;
+  let posTau = CHASE_TAU.pos, lookTau = CHASE_TAU.look, upTau = CHASE_TAU.up;
 
   if (game.state === 'title') {
     const a = game.time * 0.17;
-    eye = [plane.pos[0] + Math.cos(a) * 36, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 36];
-    // Aim a little below the jet so it sits above the menu panel.
-    look = vadd(plane.pos, [0, -16, 0]);
-    upv = [0, 1, 0]; fov = 55;
+    eye = [plane.pos[0] + Math.cos(a) * 34, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 34];
+    look = vadd(plane.pos, [0, -14, 0]);
+    upv = [0, 1, 0]; fov = 56;
     snap = true;
   } else if (game.camMode === 1 && plane.alive) {
-    eye = vadd(vadd(plane.pos, vmul(fwd, 2.3)), vmul(up, 0.95));
-    look = vadd(eye, vmul(fwd, 120));
-    upv = up; fov = 69 + plane.boost * 8;
-    snap = true;
-  } else if (game.camMode === 2) {
-    game.camAngle += dt * 0.22;
-    eye = [plane.pos[0] + Math.cos(game.camAngle) * 30, plane.pos[1] + 9 + Math.sin(game.camAngle * 0.7) * 4, plane.pos[2] + Math.sin(game.camAngle) * 30];
+    // FPV Cockpit camera: follows full roll + barrel + G-force head bob.
+    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
+    const fUp = [camMat[4], camMat[5], camMat[6]];
+    const fFwd = [-camMat[8], -camMat[9], -camMat[10]];
+    eye = vadd(vadd(plane.pos, vmul(fFwd, 2.3)), vmul(fUp, 0.96));
+    look = vadd(eye, vmul(fFwd, 120));
+    upv = fUp; fov = 70 + plane.boost * 9;
+    cam.cockpitX = lerp(cam.cockpitX, clamp(-plane.inRoll * 4.5 - plane.bankVel * 0.45, -7, 7), 1 - Math.exp(-dt * 12));
+    cam.cockpitY = lerp(cam.cockpitY, clamp(plane.inPitch * 3.5 + plane.boost * 2.2, -5, 6), 1 - Math.exp(-dt * 12));
+    if (cam.transT <= 0.02) snap = true;
+    else { posTau = 0.06; lookTau = 0.04; upTau = 0.06; }
+  } else if (game.camMode === 2 && plane.alive) {
+    // Overhead tactical view (inspired by classic pixel-art 3D flight top-down).
+    const hFwd = vnorm([-Math.sin(plane.yaw), 0, -Math.cos(plane.yaw)]);
+    const alt = 104 + plane.boost * 18;
+    eye = [plane.pos[0] - hFwd[0] * 24, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 24];
+    look = [plane.pos[0] + hFwd[0] * 32, plane.pos[1] - 6, plane.pos[2] + hFwd[2] * 32];
+    upv = hFwd;
+    fov = 52 + plane.boost * 5;
+    posTau = 0.13; lookTau = 0.09; upTau = 0.13;
+    if (game.state === 'play') {
+      eye = vadd(eye, vmul(plane.vel, posTau));
+      look = vadd(look, vmul(plane.vel, lookTau));
+    }
+  } else if (game.camMode === 3) {
+    game.camAngle += dt * 0.25;
+    eye = [plane.pos[0] + Math.cos(game.camAngle) * 29, plane.pos[1] + 9 + Math.sin(game.camAngle * 0.7) * 4, plane.pos[2] + Math.sin(game.camAngle) * 29];
     look = vadd(plane.pos, [0, 1, 0]);
     upv = [0, 1, 0]; fov = 58;
-    snap = true;
+    if (cam.transT <= 0.02) snap = true;
+    else { posTau = 0.10; lookTau = 0.07; upTau = 0.10; }
   } else {
-    const blend = vnorm(vlerp([0, 1, 0], up, 0.36));
-    const dist = 18 + plane.speed * 0.01;
-    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vmul(blend, 5.8));
-    look = vadd(plane.pos, vadd(vmul(fwd, 70), vmul(up, 2.4)));
-    upv = blend; fov = 60 + plane.boost * 11;
+    // Dynamic banking Chase camera: lateral carve lag shows off wings, flames & contrails.
+    const targetSway = -plane.inRoll * 3.8 - clamp(plane.bankVel * 0.28, -2.4, 2.4);
+    cam.sway = lerp(cam.sway, targetSway, 1 - Math.exp(-dt * 8.5));
+    const barrelKick = plane.barrelT > 0 ? Math.sin(plane.barrel) * 0.07 : 0;
+    const blend = vnorm(vadd(vlerp([0, 1, 0], up, 0.28), vmul(right, barrelKick)));
+    const dist = 16.8 + plane.speed * 0.012 + plane.boost * 2.4;
+    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 5.2), vmul(right, cam.sway)));
+    look = vadd(plane.pos, vadd(vmul(fwd, 74), vadd(vmul(up, 2.1), vmul(right, cam.sway * 0.35))));
+    upv = blend; fov = 62 + plane.boost * 12 + Math.abs(plane.inRoll) * 3.2;
     if (game.state === 'results' || game.state === 'upgrade') {
       game.camAngle += dt * 0.22;
       eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
@@ -2778,19 +3028,27 @@ function updateCamera(dt) {
       snap = true;
     } else if (game.state === 'play' && plane.alive) {
       const vel = plane.vel;
-      eye = vadd(eye, vmul(vel, CHASE_TAU.pos));
-      look = vadd(look, vmul(vel, CHASE_TAU.look));
+      eye = vadd(eye, vmul(vel, posTau));
+      look = vadd(look, vmul(vel, lookTau));
     } else {
       snap = true;
     }
   }
 
+  if (cam.transT > 0) {
+    cam.transT = Math.max(0, cam.transT - dt);
+    posTau = Math.max(posTau, 0.11);
+    lookTau = Math.max(lookTau, 0.08);
+    upTau = Math.max(upTau, 0.10);
+  }
+
   if (snap || cam.snap) {
-    cam.pos = eye.slice(); cam.look = look.slice(); cam.up = upv.slice(); cam.snap = false;
+    cam.pos = eye.slice(); cam.look = look.slice(); cam.up = upv.slice(); cam.fov = fov; cam.snap = false;
   } else {
-    cam.pos = vlerp(cam.pos, eye, 1 - Math.exp(-dt / CHASE_TAU.pos));
-    cam.look = vlerp(cam.look, look, 1 - Math.exp(-dt / CHASE_TAU.look));
-    cam.up = vnorm(vlerp(cam.up, upv, 1 - Math.exp(-dt / CHASE_TAU.up)));
+    cam.pos = vlerp(cam.pos, eye, 1 - Math.exp(-dt / posTau));
+    cam.look = vlerp(cam.look, look, 1 - Math.exp(-dt / lookTau));
+    cam.up = vnorm(vlerp(cam.up, upv, 1 - Math.exp(-dt / upTau)));
+    cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-dt * 9));
   }
   if (game.camMode !== 1) {
     const gh = terrainHeight(cam.pos[0], cam.pos[2]);
@@ -2803,7 +3061,7 @@ function updateCamera(dt) {
   }
   m4look(viewM, [cam.pos[0] + sx, cam.pos[1] + sy, cam.pos[2] + sz],
     [cam.look[0] + sx * 1.5, cam.look[1] + sy * 1.5, cam.look[2] + sz * 1.5], cam.up);
-  m4persp(projM, fov * DEG, W / H, 1, 9000);
+  m4persp(projM, cam.fov * DEG, W / H, 1, 9000);
   m4mul(vpM, projM, viewM);
 }
 
@@ -2851,10 +3109,10 @@ function togglePause() {
 function setCamera(mode) {
   if (game.state !== 'play' || game.camMode === mode) return;
   game.camMode = mode;
-  cam.snap = true;
+  cam.transT = 0.42;
   audio.beep(840);
 }
-function cycleCamera() { setCamera((game.camMode + 1) % 3); }
+function cycleCamera() { setCamera((game.camMode + 1) % 4); }
 
 /* ---------- master update ---------- */
 function update(dt) {
@@ -2865,9 +3123,11 @@ function update(dt) {
 
   if (game.state === 'title') {
     updateTitlePlane();
+    updateTrails(dt);
     updateParticles(dt);
   } else if (game.state === 'play') {
     updatePlane(dt);
+    updateTrails(dt);
     if (game.state !== 'play') { updateCamera(dt); return; }
     updateWeapons(dt);
     updateEnemies(dt);
@@ -2918,7 +3178,8 @@ function drawSky() {
 }
 
 const SOLID_SUN = [1.0, 0.78, 0.50], SOLID_AMB = [0.44, 0.42, 0.64];
-const JET_SUN = [1.0, 0.80, 0.55], JET_AMB = [0.58, 0.56, 0.74];
+const JET_SUN = [1.0, 0.84, 0.60], JET_AMB = [0.60, 0.58, 0.76];
+const shadowM = m4();
 function beginSolid() {
   gl.useProgram(solidProg);
   gl.uniformMatrix4fv(U(solidProg, 'uVP'), false, vpM);
@@ -2929,10 +3190,12 @@ function beginSolid() {
   gl.uniform1f(U(solidProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(solidProg, 'uCam'), cam.pos);
   gl.uniform1f(U(solidProg, 'uSpec'), 0.0);
+  gl.uniform1f(U(solidProg, 'uContour'), 0.0);
 }
 
 function drawTerrain() {
   beginSolid();
+  gl.uniform1f(U(solidProg, 'uContour'), 1.0);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, IDENT);
   updateFrustum(vpM);
   game.visibleChunks = 0;
@@ -2973,14 +3236,73 @@ function drawCity() {
   gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, buildings.length);
 }
 
+function drawShadows() {
+  gl.useProgram(shadowProg);
+  gl.uniformMatrix4fv(U(shadowProg, 'uVP'), false, vpM);
+  gl.uniform1i(U(shadowProg, 'uTex'), 0);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+
+  // Projected cloud shadows on sea / coastal plains.
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindVertexArray(cloudShadowVao);
+  gl.uniform1f(U(shadowProg, 'uUseTex'), 1.0);
+  for (const c of cloudDefs) {
+    const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    const off = Math.min(c.y * 0.65, 220);
+    const sx = cx - SUN_DIR[0] * off;
+    const sz = c.z - SUN_DIR[2] * off;
+    const gh = terrainHeight(sx, sz);
+    if (gh > 42) continue;
+    const sy = Math.max(gh, 0) + 0.55;
+    const rad = c.sx * 0.92;
+    if (!sphereInFrustum(sx, sy, sz, rad)) continue;
+    const dist = Math.hypot(sx - cam.pos[0], sy - cam.pos[1], sz - cam.pos[2]);
+    if (dist > 2800) continue;
+    const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
+    if (alpha < 0.02) continue;
+    m4id(shadowM);
+    shadowM[0] = rad; shadowM[10] = c.sy * 1.45;
+    shadowM[12] = sx; shadowM[13] = sy; shadowM[14] = sz;
+    gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
+    gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
+    gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  // Player jet shadow projected cleanly onto the water or ground below.
+  if (plane.alive && plane.agl < 420) {
+    const shift = Math.min(plane.agl * 0.45, 95);
+    const jx = plane.pos[0] - SUN_DIR[0] * shift;
+    const jz = plane.pos[2] - SUN_DIR[2] * shift;
+    const jy = Math.max(terrainHeight(jx, jz), 0) + 0.78;
+    const sc = 1.05 + clamp(plane.agl / 300, 0, 0.85);
+    const bankScale = Math.max(0.28, Math.abs(Math.cos(planeVisualRoll())));
+    const alpha = clamp(0.46 * (1 - plane.agl / 420), 0.06, 0.46);
+    m4rotY(shadowM, plane.yaw);
+    shadowM[0] *= sc * bankScale; shadowM[2] *= sc * bankScale;
+    shadowM[8] *= sc; shadowM[10] *= sc;
+    shadowM[12] = jx; shadowM[13] = jy; shadowM[14] = jz;
+    gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
+    gl.uniform1f(U(shadowProg, 'uUseTex'), 0.0);
+    gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
+    gl.bindVertexArray(jetShadowVao);
+    gl.drawArrays(gl.TRIANGLES, 0, jetShadowCount);
+  }
+
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 function drawJet() {
-  const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+  const m = planeMatrix(jetM, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   beginSolid();
   // Blink the hull while respawn invulnerability is running.
   const inv = plane.invuln > 0 && (Math.sin(game.time * 26) > 0);
   gl.uniform3fv(U(solidProg, 'uAmbient'), inv ? [0.75, 0.95, 1.0] : JET_AMB);
   gl.uniform3fv(U(solidProg, 'uSunColor'), JET_SUN);
-  gl.uniform1f(U(solidProg, 'uSpec'), 0.55);
+  gl.uniform1f(U(solidProg, 'uSpec'), 0.65);
   gl.uniformMatrix4fv(U(solidProg, 'uModel'), false, m);
   gl.bindVertexArray(jetMesh.vao);
   gl.drawArrays(gl.TRIANGLES, 0, jetMesh.count);
@@ -2988,15 +3310,70 @@ function drawJet() {
   gl.useProgram(burnProg);
   gl.uniformMatrix4fv(U(burnProg, 'uVP'), false, vpM);
   gl.uniformMatrix4fv(U(burnProg, 'uModel'), false, m);
-  gl.uniform1f(U(burnProg, 'uLen'), 2.6 + plane.boost * 7.5);
+  gl.uniform1f(U(burnProg, 'uLen'), 2.5 + plane.boost * 4.5 + plane.gLoad * 0.6);
   gl.uniform1f(U(burnProg, 'uZ0'), 4.9);
-  gl.uniform1f(U(burnProg, 'uIntensity'), 0.28 + plane.boost * 0.92);
+  gl.uniform1f(U(burnProg, 'uIntensity'), 0.56 + plane.boost * 0.85);
   gl.uniform1f(U(burnProg, 'uTime'), game.time);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
   gl.depthMask(false);
   gl.bindVertexArray(burnVao);
   gl.drawArrays(gl.TRIANGLES, 0, burnCount);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
+function drawTrails() {
+  let q = 0;
+  for (let s = 0; s < 2; s++) {
+    const tr = wingTrails[s];
+    if (tr.length < 2) continue;
+    for (let i = 0; i < tr.length - 1; i++) {
+      if (q >= TRAIL_QUAD_MAX) break;
+      const a = tr[i], b = tr[i + 1];
+      const ta = clamp(1 - a.age / 1.35, 0, 1);
+      const tb = clamp(1 - b.age / 1.35, 0, 1);
+      if (ta <= 0.01 && tb <= 0.01) continue;
+      // Camera-facing ribbon cross axis so trails stay crisp in Chase, Overhead & Cinema.
+      const tx = b.p[0] - a.p[0], ty = b.p[1] - a.p[1], tz = b.p[2] - a.p[2];
+      const vx = cam.pos[0] - a.p[0], vy = cam.pos[1] - a.p[1], vz = cam.pos[2] - a.p[2];
+      const distA = Math.hypot(vx, vy, vz);
+      const distB = Math.hypot(cam.pos[0] - b.p[0], cam.pos[1] - b.p[1], cam.pos[2] - b.p[2]);
+      const nearA = smoothstep(5.5, 13.0, distA);
+      const nearB = smoothstep(5.5, 13.0, distB);
+      if (nearA <= 0.01 && nearB <= 0.01) continue;
+      let sx = ty * vz - tz * vy, sy = tz * vx - tx * vz, sz = tx * vy - ty * vx;
+      const sl = Math.hypot(sx, sy, sz) || 1;
+      sx /= sl; sy /= sl; sz /= sl;
+      // Scale ribbon width gently when far (Overhead view) while keeping close chase trails razor-crisp.
+      const farScale = clamp(distA / 48, 0.75, 2.4);
+      const wa = a.w * farScale * (0.35 + 0.65 * ta), wb = b.w * farScale * (0.35 + 0.65 * tb);
+      const aa = a.a * ta * ta * nearA, ab = b.a * tb * tb * nearB;
+      const ax0 = a.p[0] - sx * wa, ay0 = a.p[1] - sy * wa, az0 = a.p[2] - sz * wa;
+      const ax1 = a.p[0] + sx * wa, ay1 = a.p[1] + sy * wa, az1 = a.p[2] + sz * wa;
+      const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
+      const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
+      let o = q * 42;
+      const putV = (x, y, z, al) => {
+        trailData[o] = x; trailData[o + 1] = y; trailData[o + 2] = z;
+        trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = al;
+        o += 7;
+      };
+      putV(ax0, ay0, az0, aa); putV(ax1, ay1, az1, aa); putV(bx1, by1, bz1, ab);
+      putV(ax0, ay0, az0, aa); putV(bx1, by1, bz1, ab); putV(bx0, by0, bz0, ab);
+      q++;
+    }
+  }
+  if (q <= 0) return;
+  gl.bindBuffer(gl.ARRAY_BUFFER, trailVbo);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, trailData.subarray(0, q * 42));
+  gl.useProgram(trailProg);
+  gl.uniformMatrix4fv(U(trailProg, 'uVP'), false, vpM);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.depthMask(false);
+  gl.bindVertexArray(trailVao);
+  gl.drawArrays(gl.TRIANGLES, 0, q * 6);
   gl.depthMask(true);
   gl.disable(gl.BLEND);
 }
@@ -3048,17 +3425,13 @@ function drawClouds() {
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
-    const dx = cam.pos[0] - cx, dy = cam.pos[1] - c.y, dz = cam.pos[2] - c.z;
-    const dl = Math.hypot(dx, dy, dz) || 1;
-    let rx = dz / dl, rz = -dx / dl;
-    let rl = Math.hypot(rx, rz);
-    if (rl < 0.01) { rx = 1; rz = 0; rl = 1; } else { rx /= rl; rz /= rl; }
-    cloudM[0] = rx * c.sx; cloudM[1] = 0; cloudM[2] = rz * c.sx; cloudM[3] = 0;
-    cloudM[4] = 0; cloudM[5] = c.sy; cloudM[6] = 0; cloudM[7] = 0;
+    // Spherical billboarding keeps clouds volumetric from Overhead, Chase and Cockpit views.
+    cloudM[0] = camRight[0] * c.sx; cloudM[1] = camRight[1] * c.sx; cloudM[2] = camRight[2] * c.sx; cloudM[3] = 0;
+    cloudM[4] = camUp[0] * c.sy;    cloudM[5] = camUp[1] * c.sy;    cloudM[6] = camUp[2] * c.sy;    cloudM[7] = 0;
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    tint[0] = 1.0; tint[1] = c.tintY; tint[2] = 0.68;
+    tint[0] = 1.0; tint[1] = c.tintY + 0.08; tint[2] = 0.78;
     gl.uniform3fv(U(cloudProg, 'uTint'), tint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -3092,7 +3465,7 @@ function buildPoints() {
   for (const b of ebullets) put(b.p, PT_BULLET, b.kind ? -1.6 : 1.3, game.time);
   const showJet = game.state !== 'title' ? (game.camMode !== 1 && plane.alive) : plane.alive;
   if (showJet) {
-    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
     for (let i = 0; i < 3; i++) {
       ptLeft[i] = plane.pos[i] + camMat[i] * 4.9;
       ptRight[i] = plane.pos[i] - camMat[i] * 4.9;
@@ -3216,11 +3589,13 @@ function renderScene() {
 
   drawTerrain();
   drawWater();
+  drawShadows();
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
   drawEnemies();
   drawClouds();
+  if (showJet || game.state === 'title') drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);
@@ -3313,12 +3688,13 @@ function drawTargetBox() {
 
 function drawOffscreenArrow() {
   if (!plane.alive) return;
-  const cx = W / 2, cy = H / 2, margin = 22;
+  const cx = W / 2, cy = game.camMode === 1 ? 96 : H / 2, margin = 22;
+  const botLimit = game.camMode === 1 ? H - 92 : H - 32;
   let target = null, dist = 1e9;
   for (const e of enemies) {
     if (!e.alive) continue;
     const p = projPoint(vpM, e.pos);
-    const onScreen = p && p[0] > 14 && p[0] < W - 14 && p[1] > 24 && p[1] < H - 32;
+    const onScreen = p && p[0] > 14 && p[0] < W - 14 && p[1] > 24 && p[1] < botLimit;
     if (onScreen) continue;
     const dd = vlen(vsub(e.pos, plane.pos));
     // The boss always wins the arrow, even when far away.
@@ -3335,7 +3711,7 @@ function drawOffscreenArrow() {
   let m = Math.hypot(ax, ay);
   if (m < 1e-3) { ax = 0; ay = 1; m = 1; }
   ax /= m; ay /= m;
-  const halfW = cx - margin, halfH = cy - margin;
+  const halfW = cx - margin, halfH = Math.min(cy - margin, botLimit - cy);
   const t = Math.min(halfW / Math.max(Math.abs(ax), 1e-4), halfH / Math.max(Math.abs(ay), 1e-4));
   const ex = Math.round(cx + ax * t), ey = Math.round(cy + ay * t);
   hud.save();
@@ -3348,7 +3724,7 @@ function drawOffscreenArrow() {
   hud.restore();
   drawTextC((vdist(target.pos, plane.pos) / 1000).toFixed(1) + 'KM',
     clamp(Math.round(ex - ax * 12), 26, W - 26),
-    clamp(Math.round(ey - ay * 11), 22, H - 26), COL.amber, 1, 0);
+    clamp(Math.round(ey - ay * 11), 22, botLimit - 8), COL.amber, 1, 0);
 }
 
 function drawPops() {
@@ -3431,45 +3807,355 @@ function drawTitleScreen() {
   drawTextSh('F / RMB', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE', 178, 180, COL.bone, 1, 0);
   drawTextSh('X', 76, 192, COL.amber, 1, 0); drawTextSh('FLARES', 178, 192, COL.bone, 1, 0);
   drawTextSh('SHIFT', 262, 156, COL.amber, 1, 0); drawTextSh('BOOST', 322, 156, COL.bone, 1, 0);
-  drawTextSh('B', 262, 168, COL.amber, 1, 0); drawTextSh('BARREL ROLL', 322, 168, COL.bone, 1, 0);
-  drawTextSh('C / 1-3', 262, 180, COL.amber, 1, 0); drawTextSh('CAMERA', 322, 180, COL.bone, 1, 0);
+  drawTextSh('B / 2X A,D', 262, 168, COL.amber, 1, 0); drawTextSh('ROLL', 336, 168, COL.bone, 1, 0);
+  drawTextSh('C / 1-4', 262, 180, COL.amber, 1, 0); drawTextSh('CAMERA', 322, 180, COL.bone, 1, 0);
   drawTextSh('P / M / R', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE MUTE RETRY', 322, 192, COL.bone, 1, 0);
   drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
   drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
 }
 
-/* ---------- cockpit ---------- */
-function drawCockpitFrame() {
-  hud.fillStyle = 'rgba(10,8,16,0.76)';
-  hud.fillRect(0, 0, W, 3);
-  hud.fillRect(0, 0, 3, H);
-  hud.fillRect(W - 3, 0, 3, H);
-  for (let i = 0; i < 12; i++) {
-    hud.fillRect(3 + i * 5, 3 + i * 2, 40 - i * 3, 2);
-    hud.fillRect(W - 43 + i * 3, 3 + i * 2, 40 - i * 3, 2);
+/* ---------- cockpit (pixel-art canopy, HUD combiner & instrument dash) ---------- */
+function drawCockpitProjector() {
+  const ox = Math.round(cam.cockpitX * 0.45);
+  const oy = Math.round(cam.cockpitY * 0.45);
+  const gx = 160 + ox, gy = 48 + oy, gw = 160, gh = 114;
+  const cx = gx + gw / 2, cy = gy + gh / 2;
+  const roll = planeVisualRoll();
+
+  // Translucent holographic HUD combiner glass pane.
+  hud.fillStyle = 'rgba(130,245,195,0.08)';
+  hud.fillRect(gx, gy, gw, gh);
+  hud.strokeStyle = 'rgba(165,255,220,0.28)';
+  hud.lineWidth = 1;
+  hud.strokeRect(gx + 0.5, gy + 0.5, gw - 1, gh - 1);
+  // Subtle combiner glass specular streak.
+  hud.fillStyle = 'rgba(220,255,240,0.06)';
+  hud.fillRect(gx + 6, gy + 4, 24, 2);
+  hud.fillRect(gx + 10, gy + 8, 14, 2);
+
+  hud.save();
+  hud.beginPath();
+  hud.rect(gx + 1, gy + 1, gw - 2, gh - 2);
+  hud.clip();
+
+  // Rotating/pitching artificial horizon & pitch ladder inside glass.
+  hud.save();
+  hud.translate(cx, cy + clamp(plane.pitch * 95, -90, 90));
+  hud.rotate(-roll);
+  // Horizon bar
+  hud.fillStyle = 'rgba(110,255,170,0.72)';
+  hud.fillRect(-52, 0, 36, 1); hud.fillRect(16, 0, 36, 1);
+  hud.fillRect(-52, 0, 1, 4); hud.fillRect(51, 0, 1, 4);
+  // Pitch rungs (+15, +30, -15, -30)
+  for (const deg of [-30, -15, 15, 30]) {
+    const py = Math.round(-deg * 1.45);
+    hud.fillStyle = 'rgba(110,255,170,0.45)';
+    if (deg > 0) {
+      hud.fillRect(-26, py, 14, 1); hud.fillRect(12, py, 14, 1);
+      hud.fillRect(-26, py, 1, 3); hud.fillRect(25, py, 1, 3);
+    } else {
+      for (let d = 0; d < 12; d += 4) {
+        hud.fillRect(-26 + d, py, 2, 1);
+        hud.fillRect(12 + d, py, 2, 1);
+      }
+      hud.fillRect(-26, py - 2, 1, 3); hud.fillRect(25, py - 2, 1, 3);
+    }
   }
-  hud.fillStyle = 'rgba(10,8,16,0.62)';
-  hud.fillRect(0, H - 27, W, 2);
-  hud.fillStyle = 'rgba(255,180,92,0.35)';
-  hud.fillRect(26, H - 23, 72, 1);
-  hud.fillRect(W - 98, H - 23, 72, 1);
+  hud.restore();
+
+  // Left vertical speed tape & right vertical altitude tape.
+  hud.fillStyle = 'rgba(110,255,170,0.58)';
+  hud.fillRect(gx + 16, gy + 16, 1, gh - 32);
+  hud.fillRect(gx + gw - 17, gy + 16, 1, gh - 32);
+  const spdOff = Math.floor(plane.speed * 0.4) % 10;
+  const altOff = Math.floor(plane.agl * 0.6) % 10;
+  for (let i = 0; i < 8; i++) {
+    const sy = gy + 20 + i * 10 + (spdOff % 10);
+    const ay = gy + 20 + i * 10 + (altOff % 10);
+    if (sy > gy + 16 && sy < gy + gh - 16) hud.fillRect(gx + 12, sy, 4, 1);
+    if (ay > gy + 16 && ay < gy + gh - 16) hud.fillRect(gx + gw - 16, ay, 4, 1);
+  }
+  drawText(String(Math.round(plane.speed * 2.2)), gx + 4, cy - 3, '#72ffb0', 1, 0);
+  drawTextR(String(Math.round(Math.max(0, plane.agl * 12))), gx + gw - 4, cy - 3, '#72ffb0', 1, 0);
+
+  // Top heading compass tape inside combiner.
+  const hdg = (((-plane.yaw * 180 / Math.PI) % 360) + 360) % 360;
+  hud.fillStyle = 'rgba(110,255,170,0.45)';
+  hud.fillRect(cx - 42, gy + 11, 84, 1);
+  hud.fillRect(cx, gy + 12, 1, 3);
+  drawTextC(pad(hdg, 3), cx, gy + 3, '#72ffb0', 1, 0);
+
+  // Center boresight chevron.
+  hud.fillStyle = 'rgba(120,255,175,0.92)';
+  hud.fillRect(cx - 7, cy, 4, 1); hud.fillRect(cx + 4, cy, 4, 1);
+  hud.fillRect(cx - 3, cy + 1, 2, 1); hud.fillRect(cx + 2, cy + 1, 2, 1);
+  hud.fillRect(cx, cy + 2, 1, 1);
+  hud.restore();
 }
 
-function drawCockpitProjector() {
-  const cx = 240, cy = 134;
-  hud.fillStyle = 'rgba(255,180,92,0.20)';
-  for (let i = 0; i < 24; i++) {
-    const a = i / 24 * TAU;
-    hud.fillRect(Math.round(cx + Math.cos(a) * 16), Math.round(cy + Math.sin(a) * 16), 1, 1);
-  }
+function drawCockpitFrame() {
+  const ox = Math.round(cam.cockpitX);
+  const oy = Math.round(cam.cockpitY);
+  const roll = planeVisualRoll();
+
+  // 1) Curved metallic canopy arch sweeping around the windshield.
   hud.save();
-  hud.translate(cx, cy + clamp(plane.pitch * 70, -82, 82));
-  hud.rotate(-plane.roll);
-  hud.fillStyle = 'rgba(242,230,208,0.30)';
-  hud.fillRect(-42, 0, 28, 1); hud.fillRect(14, 0, 28, 1);
-  hud.fillStyle = 'rgba(255,180,92,0.45)';
-  hud.fillRect(-6, 0, 12, 1);
+  hud.strokeStyle = '#151722';
+  hud.lineWidth = 18;
+  hud.beginPath();
+  hud.ellipse(W / 2 + ox * 0.5, 224 + oy * 0.5, 258, 222, 0, Math.PI, TAU);
+  hud.stroke();
+  hud.strokeStyle = '#2d3345';
+  hud.lineWidth = 10;
+  hud.beginPath();
+  hud.ellipse(W / 2 + ox * 0.5, 224 + oy * 0.5, 252, 217, 0, Math.PI, TAU);
+  hud.stroke();
+  hud.strokeStyle = '#636d86';
+  hud.lineWidth = 2;
+  hud.beginPath();
+  hud.ellipse(W / 2 + ox * 0.5, 224 + oy * 0.5, 246, 211, 0, Math.PI, TAU);
+  hud.stroke();
+
+  // Rivets along the canopy arch.
+  hud.fillStyle = '#8b95b0';
+  for (let i = 1; i <= 11; i++) {
+    const a = Math.PI + (i / 12) * Math.PI;
+    const rx = Math.round(W / 2 + ox * 0.5 + Math.cos(a) * 252);
+    const ry = Math.round(224 + oy * 0.5 + Math.sin(a) * 217);
+    hud.fillRect(rx, ry, 2, 2);
+  }
+
+  // Subtle curved canopy glare streaks.
+  hud.fillStyle = 'rgba(245,230,210,0.09)';
+  hud.fillRect(36 + ox, 78 + oy, 3, 28);
+  hud.fillRect(42 + ox, 66 + oy, 2, 18);
+  hud.fillRect(438 + ox, 78 + oy, 3, 28);
   hud.restore();
+
+  // 2) Instrument console chassis at bottom of frame.
+  const dy = 186 + Math.round(oy * 0.6);
+  const dx = Math.round(ox * 0.7);
+  // Top glare shield lip with bevel
+  hud.fillStyle = '#0d0f18';
+  hud.fillRect(0, dy - 3, W, H - dy + 8);
+  hud.fillStyle = '#262b3b';
+  hud.fillRect(0, dy, W, H - dy + 4);
+  hud.fillStyle = '#485068';
+  hud.fillRect(0, dy, W, 2);
+  hud.fillStyle = '#141722';
+  hud.fillRect(0, dy + 2, W, 2);
+  // Warm amber trim accents on glare shield (nod to classic pixel cockpit)
+  hud.fillStyle = '#d67438';
+  hud.fillRect(62 + dx, dy - 2, 54, 2);
+  hud.fillRect(364 + dx, dy - 2, 54, 2);
+  hud.fillRect(198 + dx, dy - 2, 84, 2);
+
+  // Center raised hood housing around attitude indicator
+  hud.fillStyle = '#1b1f2d';
+  hud.fillRect(184 + dx, dy - 6, 112, 86);
+  hud.fillStyle = '#3c445c';
+  hud.fillRect(184 + dx, dy - 6, 112, 2);
+  hud.fillStyle = '#10131c';
+  hud.fillRect(186 + dx, dy - 4, 108, 2);
+
+  // 3) LEFT MFD: Live tactical phosphor radar with sweep beam
+  const lx = 40 + dx, ly = dy + 8, lw = 96, lh = 64;
+  hud.fillStyle = '#12151f';
+  hud.fillRect(lx - 3, ly - 3, lw + 6, lh + 6);
+  hud.fillStyle = '#3b4259';
+  hud.fillRect(lx - 2, ly - 2, lw + 4, 1);
+  hud.fillStyle = '#071b14';
+  hud.fillRect(lx, ly, lw, lh);
+  // Subtle CRT scanlines & grid
+  hud.fillStyle = 'rgba(65,210,130,0.14)';
+  for (let gx = lx + 16; gx < lx + lw; gx += 16) hud.fillRect(gx, ly, 1, lh);
+  for (let gy = ly + 16; gy < ly + lh; gy += 16) hud.fillRect(lx, gy, lw, 1);
+
+  const rcx = lx + lw / 2, rcy = ly + lh / 2, rr = 26;
+  hud.strokeStyle = 'rgba(72,225,140,0.34)';
+  hud.lineWidth = 1;
+  hud.beginPath(); hud.arc(rcx, rcy, rr, 0, TAU); hud.stroke();
+  hud.beginPath(); hud.arc(rcx, rcy, rr * 0.55, 0, TAU); hud.stroke();
+  // Rotating phosphor sweep line
+  const sweepA = game.time * 2.4;
+  hud.strokeStyle = 'rgba(110,255,170,0.75)';
+  hud.beginPath();
+  hud.moveTo(rcx, rcy);
+  hud.lineTo(rcx + Math.cos(sweepA) * rr, rcy + Math.sin(sweepA) * rr);
+  hud.stroke();
+  // Hostile blips on MFD radar
+  const fwd = flightForward();
+  const heading = Math.atan2(fwd[0], -fwd[2]);
+  const rcos = Math.cos(-heading), rsin = Math.sin(-heading);
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const edx = e.pos[0] - plane.pos[0], edz = e.pos[2] - plane.pos[2];
+    let px = rcx + ((edx * rcos - edz * rsin) / 1500) * rr;
+    let py = rcy + ((edx * rsin + edz * rcos) / 1500) * rr;
+    const d = Math.hypot(px - rcx, py - rcy);
+    if (d > rr - 2) { px = rcx + (px - rcx) / d * (rr - 2); py = rcy + (py - rcy) / d * (rr - 2); }
+    hud.fillStyle = e.type === 'carrier' ? '#ff5a5f' : '#80ffb8';
+    const sz = e.type === 'carrier' ? 3 : 2;
+    hud.fillRect(Math.round(px - 1), Math.round(py - 1), sz, sz);
+  }
+  hud.fillStyle = '#e8ffe8';
+  hud.fillRect(rcx - 1, rcy - 2, 2, 4);
+  hud.fillRect(rcx - 2, rcy, 4, 1);
+  drawText('RDR', lx + 3, ly + 3, '#58e098', 1, 0);
+
+  // 4) LEFT WARNING ANNUNCIATOR LEDs (x: 144..178)
+  const wx = 144 + dx;
+  const leds = [
+    ['LCK', !!game.lock, '#ff4c52'],
+    ['LOW', plane.agl < 50 && blinkOn(10), '#ff4c52'],
+    ['OVR', weapons.overheated || weapons.heat > 75, weapons.overheated ? '#ff4c52' : '#ffb45c'],
+    ['SHD', game.shield >= game.mods.shieldMax * 0.9, '#5fa8ff']
+  ];
+  for (let i = 0; i < leds.length; i++) {
+    const [lbl, on, col] = leds[i];
+    const by = dy + 10 + i * 15;
+    hud.fillStyle = '#11131c';
+    hud.fillRect(wx, by, 32, 11);
+    hud.fillStyle = on ? col : '#262b3a';
+    hud.fillRect(wx + 2, by + 2, 5, 7);
+    drawText(lbl, wx + 10, by + 2, on ? col : '#52586e', 1, 0);
+  }
+
+  // 5) CENTER SPHERICAL ATTITUDE INDICATOR (Artificial Horizon Ball)
+  const acx = 240 + dx, acy = dy + 36, ar = 31;
+  // Metallic outer ring + corner rivets
+  hud.fillStyle = '#10121b';
+  hud.beginPath(); hud.arc(acx, acy, ar + 5, 0, TAU); hud.fill();
+  hud.strokeStyle = '#505872';
+  hud.lineWidth = 2;
+  hud.beginPath(); hud.arc(acx, acy, ar + 3, 0, TAU); hud.stroke();
+  hud.fillStyle = '#8b95b0';
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    hud.fillRect(acx + sx * (ar + 1) - 1, acy + sy * (ar + 1) - 1, 2, 2);
+  }
+  // Clipped rotating pitch/roll horizon sphere
+  hud.save();
+  hud.beginPath(); hud.arc(acx, acy, ar, 0, TAU); hud.clip();
+  hud.translate(acx, acy);
+  hud.rotate(-roll);
+  const pShift = clamp(plane.pitch * 36, -ar, ar);
+  // Sky hemisphere (warm dusk sky blue -> peach horizon)
+  hud.fillStyle = '#2d6ea8';
+  hud.fillRect(-ar - 10, -ar - 40 + pShift, (ar + 10) * 2, ar + 40);
+  hud.fillStyle = '#6da4c8';
+  hud.fillRect(-ar - 10, -10 + pShift, (ar + 10) * 2, 10);
+  // Ground hemisphere (warm dark umber earth)
+  hud.fillStyle = '#7c4c28';
+  hud.fillRect(-ar - 10, pShift, (ar + 10) * 2, ar + 40);
+  hud.fillStyle = '#4f301b';
+  hud.fillRect(-ar - 10, 14 + pShift, (ar + 10) * 2, ar + 30);
+  // Crisp white horizon & pitch ticks
+  hud.fillStyle = '#f5ecd8';
+  hud.fillRect(-ar - 6, Math.round(pShift), (ar + 6) * 2, 1);
+  for (const off of [-16, -8, 8, 16]) {
+    const w = Math.abs(off) === 8 ? 10 : 16;
+    hud.fillRect(-w / 2, Math.round(pShift + off), w, 1);
+  }
+  hud.restore();
+  // Fixed orange miniature wings reference in center of ball (with crisp dark outline)
+  hud.fillStyle = '#141722';
+  hud.fillRect(acx - 17, acy - 2, 12, 4);
+  hud.fillRect(acx + 5, acy - 2, 12, 4);
+  hud.fillRect(acx - 3, acy - 2, 6, 4);
+  hud.fillRect(acx - 2, acy + 1, 4, 4);
+  hud.fillStyle = '#ff9d3b';
+  hud.fillRect(acx - 16, acy - 1, 10, 2);
+  hud.fillRect(acx + 6, acy - 1, 10, 2);
+  hud.fillRect(acx - 2, acy - 1, 4, 2);
+  hud.fillRect(acx - 1, acy + 1, 2, 3);
+  // Top roll index triangle
+  hud.fillStyle = '#ffd166';
+  hud.fillRect(acx - 1, acy - ar + 1, 3, 2);
+  hud.fillRect(acx, acy - ar + 3, 1, 2);
+
+  // 6) RIGHT WEAPONS & COUNTERMEASURE STATUS (x: 304..336)
+  const rx = 304 + dx;
+  hud.fillStyle = '#11131c';
+  hud.fillRect(rx, dy + 10, 32, 60);
+  drawText('MSL', rx + 3, dy + 13, '#ffb45c', 1, 0);
+  const mMax = Math.min(8, game.mods.missileMax);
+  for (let i = 0; i < mMax; i++) {
+    hud.fillStyle = i < weapons.ammo ? '#ffb45c' : '#262b3a';
+    hud.fillRect(rx + 3 + (i % 4) * 7, dy + 23 + Math.floor(i / 4) * 6, 5, 4);
+  }
+  drawText('FLR', rx + 3, dy + 38, '#5ee0d0', 1, 0);
+  for (let i = 0; i < Math.min(5, game.mods.flareMax); i++) {
+    hud.fillStyle = i < weapons.flares ? '#5ee0d0' : '#262b3a';
+    hud.fillRect(rx + 3 + i * 5, dy + 48, 4, 4);
+  }
+  drawText('ROL', rx + 3, dy + 57, weapons.rollCd <= 0 ? '#72ffb0' : '#52586e', 1, 0);
+  hud.fillStyle = weapons.rollCd <= 0 ? '#72ffb0' : '#262b3a';
+  hud.fillRect(rx + 23, dy + 58, 6, 5);
+
+  // 7) RIGHT MFD: Aircraft schematic, digital ALT/SPD & vertical Thruster/Hull/Heat bars
+  const mx = 344 + dx, my = dy + 8, mw = 96, mh = 64;
+  hud.fillStyle = '#12151f';
+  hud.fillRect(mx - 3, my - 3, mw + 6, mh + 6);
+  hud.fillStyle = '#3b4259';
+  hud.fillRect(mx - 2, my - 2, mw + 4, 1);
+  hud.fillStyle = '#09151c';
+  hud.fillRect(mx, my, mw, mh);
+
+  // Digital ALT / SPD telemetry
+  drawText(pad(Math.max(0, plane.agl * 12), 5), mx + 4, my + 4, '#ffb45c', 1, 0);
+  drawText('ALT', mx + 4, my + 13, '#5c7c8a', 1, 0);
+  drawText(pad(plane.speed * 2.2, 3), mx + 4, my + 44, '#72ffb0', 1, 0);
+  drawText('KTS', mx + 4, my + 53, '#5c7c8a', 1, 0);
+
+  // Pixel-art fighter schematic colored by hull integrity + shield outline + thruster flame
+  const sx = mx + 46, sy = my + 32;
+  const hFrac = clamp(game.hull / game.mods.hullMax, 0, 1);
+  const sFrac = clamp(game.shield / game.mods.shieldMax, 0, 1);
+  const jetCol = hFrac > 0.55 ? '#55e898' : hFrac > 0.28 ? '#ffb45c' : '#ff5a5f';
+  if (sFrac > 0.05) {
+    hud.strokeStyle = 'rgba(95,168,255,' + (0.25 + sFrac * 0.55).toFixed(2) + ')';
+    hud.lineWidth = 1;
+    hud.beginPath(); hud.arc(sx, sy, 18, 0, TAU); hud.stroke();
+  }
+  hud.fillStyle = jetCol;
+  hud.fillRect(sx - 2, sy - 14, 4, 24);      // fuselage
+  hud.fillRect(sx - 1, sy - 17, 2, 4);       // nose
+  hud.fillRect(sx - 13, sy - 2, 26, 5);      // main wings
+  hud.fillRect(sx - 9, sy - 5, 18, 3);       // swept leading edge
+  hud.fillRect(sx - 7, sy + 7, 14, 3);       // tail stabilizers
+  // Animated twin thruster flame pixels on schematic
+  const fl = 3 + Math.round(plane.boost * 5 + (Math.sin(game.time * 32) > 0 ? 1 : 0));
+  hud.fillStyle = plane.boost > 0.4 ? '#ffe478' : '#ff7b36';
+  hud.fillRect(sx - 3, sy + 11, 2, fl);
+  hud.fillRect(sx + 1, sy + 11, 2, fl);
+
+  // Twin vertical segmented bar gauges: Boost/Thrust (left) & Heat (right)
+  const drawSegBar = (bx, by, frac, hotCol, normCol) => {
+    const segs = 10;
+    for (let i = 0; i < segs; i++) {
+      const f = (i + 1) / segs;
+      const lit = frac >= f - 0.05;
+      hud.fillStyle = lit ? (f > 0.75 ? hotCol : normCol) : '#182830';
+      hud.fillRect(bx, by + (segs - 1 - i) * 5, 7, 3);
+    }
+  };
+  drawSegBar(mx + 74, my + 8, clamp(0.35 + plane.boost * 0.65, 0, 1), '#ffe066', '#55e898');
+  drawSegBar(mx + 85, my + 8, weapons.heat / 100, '#ff5a5f', '#ffb45c');
+
+  // 8) Side console switches & throttle details
+  hud.fillStyle = '#151824';
+  hud.fillRect(4 + dx, dy + 12, 28, 56);
+  hud.fillRect(448 + dx, dy + 12, 28, 56);
+  for (let i = 0; i < 4; i++) {
+    hud.fillStyle = i === 0 ? '#ff6a3c' : '#55e898';
+    hud.fillRect(10 + dx, dy + 18 + i * 11, 6, 4);
+    hud.fillStyle = '#485068';
+    hud.fillRect(20 + dx, dy + 18 + i * 11, 8, 4);
+    hud.fillStyle = i < 2 ? '#ffb45c' : '#5fa8ff';
+    hud.fillRect(454 + dx, dy + 18 + i * 11, 6, 4);
+    hud.fillStyle = '#485068';
+    hud.fillRect(464 + dx, dy + 18 + i * 11, 8, 4);
+  }
 }
 
 /* ---------- flight HUD ---------- */
@@ -3514,12 +4200,17 @@ function drawWaveBanner() {
 }
 
 function drawPlayHUD() {
-  if (game.camMode === 1 && plane.alive) drawCockpitFrame();
-  hud.fillStyle = 'rgba(8,6,16,0.34)';
-  hud.fillRect(0, H - 14, W, 14);
+  const fpv = game.camMode === 1 && plane.alive;
+  if (fpv) {
+    drawCockpitProjector();
+    drawCockpitFrame();
+  } else {
+    hud.fillStyle = 'rgba(8,6,16,0.34)';
+    hud.fillRect(0, H - 14, W, 14);
+  }
 
-  const camName = ['CHASE', 'FPV', 'CINEMA'][game.camMode];
-  drawTextSh('DP ' + camName, 8, 258, COL.dim, 1, 0);
+  const camName = ['CHASE', 'FPV', 'TOP', 'CINEMA'][game.camMode];
+  if (!fpv) drawTextSh('DP ' + camName, 8, 258, COL.dim, 1, 0);
 
   drawWaveInfo();
   drawTextC(pad(game.score, 6), 240, 2, COL.amber, 2, 0);
@@ -3527,27 +4218,28 @@ function drawPlayHUD() {
     drawTextC('X' + game.combo + ' COMBO', 240, 20, blinkOn(10) ? COL.amber : COL.bone, 1, 0);
   }
   drawTextR('BEST ' + pad(game.best, 6), 472, 6, COL.dim, 1, 0);
-  drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax, 472, 18, weapons.ammo ? COL.bone : COL.red, 1, 0);
-  drawTextR('FLR ' + weapons.flares, 472, 30, weapons.flares ? COL.bone : COL.dim, 1, 0);
-  const ready = weapons.rollCd <= 0;
-  hud.fillStyle = ready ? 'rgba(255,180,92,0.9)' : 'rgba(242,230,208,0.25)';
-  hud.fillRect(462, 31, ready ? 10 : Math.round(10 * (1 - weapons.rollCd / game.mods.rollCd)), 2);
+  if (!fpv) {
+    drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax, 472, 18, weapons.ammo ? COL.bone : COL.red, 1, 0);
+    drawTextR('FLR ' + weapons.flares, 472, 30, weapons.flares ? COL.bone : COL.dim, 1, 0);
+    const ready = weapons.rollCd <= 0;
+    drawTextR('ROLL', 446, 42, ready ? COL.amber : COL.dim, 1, 0);
+    drawGauge(450, 44, 22, 3, ready ? 1 : clamp(1 - weapons.rollCd / game.mods.rollCd, 0, 1), ready ? '#ffb45c' : '#8f84a2');
 
-  drawBars();
-  drawRadar(W - 40, H - 66, 27);
+    drawBars();
+    drawRadar(W - 40, H - 66, 27);
+  }
 
   if (plane.alive) {
     let wy = 46;
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);
-    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, plane.roll + plane.barrel);
+    planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
     if (camMat[5] < -0.3 && plane.barrelT <= 0) warn('INVERTED', COL.amber);
   }
   if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 216, COL.dim, 1, 0);
 
-  drawReticle();
-  if (game.camMode === 1 && plane.alive) drawCockpitProjector();
+  if (!fpv && game.camMode !== 2) drawReticle();
   drawTargetBox();
   drawOffscreenArrow();
 
