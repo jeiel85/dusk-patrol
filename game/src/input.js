@@ -25,6 +25,7 @@ resize();
 const keys = Object.create(null);
 let mouseDX = 0, mouseDY = 0;
 let lastTapKey = '', lastTapT = 0;
+function resetDoubleTap() { lastTapKey = ''; lastTapT = 0; }
 window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
@@ -38,12 +39,12 @@ window.addEventListener('keydown', e => {
       keys[k] = true;
       return;
     }
-    if (game.state === 'play' && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
+    if (game.state === 'play' && plane.alive && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
       const side = (k === 'KeyA' || k === 'ArrowLeft') ? 'L' : 'R';
       const now = performance.now();
       if (lastTapKey === side && now - lastTapT < 240) {
         startBarrel(side === 'L' ? 1 : -1);
-        lastTapKey = '';
+        resetDoubleTap();
       } else {
         lastTapKey = side;
         lastTapT = now;
@@ -100,6 +101,7 @@ document.addEventListener('pointerlockchange', () => {
 // Leaving the tab or window mid-flight pauses instead of flying on unattended.
 function releaseInputs() {
   for (const k in keys) keys[k] = false;
+  resetDoubleTap();
   touch.reset();
   if (game.state === 'play') togglePause();
 }

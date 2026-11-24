@@ -1152,12 +1152,14 @@ function buildFin(sign) {
     );
   }
   jet.quad(p0, p1, [p2[0] - sign * 0.04, 1.75, 4.95], [p3[0] - sign * 0.04, 1.75, 3.95], JET_EDGE, [sign, 0.3, 0]);
-  // Tail fin tip accent.
-  jet.quad(
-    [0.86 * sign, 1.48, 3.82], [0.86 * sign, 1.48, 4.90],
-    [0.98 * sign, 1.75, 4.95], [0.98 * sign, 1.75, 3.95],
-    JET_ORANGE, [sign, 0.25, 0]
-  );
+  // Tail fin tip accent offset outside both fin faces so it renders cleanly.
+  for (const off of [-0.046, 0.046]) {
+    jet.quad(
+      [0.86 * sign + off, 1.48, 3.82], [0.86 * sign + off, 1.48, 4.90],
+      [0.98 * sign + off, 1.75, 4.95], [0.98 * sign + off, 1.75, 3.95],
+      JET_ORANGE, [off > 0 ? 1 : -1, 0.25, 0]
+    );
+  }
 }
 buildFin(1); buildFin(-1);
 
@@ -2276,6 +2278,7 @@ resize();
 const keys = Object.create(null);
 let mouseDX = 0, mouseDY = 0;
 let lastTapKey = '', lastTapT = 0;
+function resetDoubleTap() { lastTapKey = ''; lastTapT = 0; }
 window.addEventListener('keydown', e => {
   const k = e.code;
   if (k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Space') e.preventDefault();
@@ -2289,12 +2292,12 @@ window.addEventListener('keydown', e => {
       keys[k] = true;
       return;
     }
-    if (game.state === 'play' && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
+    if (game.state === 'play' && plane.alive && (k === 'KeyA' || k === 'ArrowLeft' || k === 'KeyD' || k === 'ArrowRight')) {
       const side = (k === 'KeyA' || k === 'ArrowLeft') ? 'L' : 'R';
       const now = performance.now();
       if (lastTapKey === side && now - lastTapT < 240) {
         startBarrel(side === 'L' ? 1 : -1);
-        lastTapKey = '';
+        resetDoubleTap();
       } else {
         lastTapKey = side;
         lastTapT = now;
@@ -2351,6 +2354,7 @@ document.addEventListener('pointerlockchange', () => {
 // Leaving the tab or window mid-flight pauses instead of flying on unattended.
 function releaseInputs() {
   for (const k in keys) keys[k] = false;
+  resetDoubleTap();
   touch.reset();
   if (game.state === 'play') togglePause();
 }
@@ -2700,7 +2704,6 @@ function updateTrails(dt) {
   trailSampleT = 0.016;
   planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   const rx = camMat[0], ry = camMat[1], rz = camMat[2];
-  const ux = camMat[4], uy = camMat[5], uz = camMat[6];
   const fx = -camMat[8], fy = -camMat[9], fz = -camMat[10];
   const gFactor = clamp(Math.abs(plane.inRoll) * 0.95 + Math.abs(plane.bankVel) * 0.25 + Math.abs(plane.inPitch) * 0.65 + (plane.barrelT > 0 ? 1.0 : 0) + plane.boost * 0.75, 0, 1.2);
   const w = 0.08 + Math.min(1, gFactor) * 0.07;
@@ -2714,8 +2717,6 @@ function updateTrails(dt) {
         plane.pos[1] + ry * (4.92 * sign) - fy * 2.05,
         plane.pos[2] + rz * (4.92 * sign) - fz * 2.05
       ],
-      u: [ux, uy, uz],
-      r: [rx, ry, rz],
       w, a: alpha, age: 0
     });
     if (tr.length > TRAIL_MAX) tr.shift();
@@ -2833,6 +2834,7 @@ function crash(killed) {
   if (!plane.alive) return;
   if (game.camMode === 1) { game.camMode = 0; cam.snap = true; }
   plane.alive = false;
+  plane.barrel = 0; plane.barrelT = 0;
   explode(plane.pos, 2.0);
   game.shake = 1.4; game.lock = null;
   audio.explosion();
@@ -2858,7 +2860,7 @@ function respawnPlane() {
   game.shield = game.mods.shieldMax;
   game.shieldT = 0;
   clearTrails();
-  cam.snap = true; cam.transT = 0; cam.sway = 0;
+  cam.snap = true; cam.transT = 0; cam.sway = 0; cam.cockpitX = 0; cam.cockpitY = 0;
 }
 
 /* ---------- plane ---------- */
@@ -2979,6 +2981,11 @@ function updateCamera(dt) {
     look = vadd(plane.pos, [0, -14, 0]);
     upv = [0, 1, 0]; fov = 56;
     snap = true;
+  } else if (game.state === 'results' || game.state === 'upgrade') {
+    game.camAngle += dt * 0.22;
+    eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
+    look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
+    snap = true;
   } else if (game.camMode === 1 && plane.alive) {
     // FPV Cockpit camera: follows full roll + barrel + G-force head bob.
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
@@ -2991,8 +2998,8 @@ function updateCamera(dt) {
     cam.cockpitY = lerp(cam.cockpitY, clamp(plane.inPitch * 3.5 + plane.boost * 2.2, -5, 6), 1 - Math.exp(-dt * 12));
     if (cam.transT <= 0.02) snap = true;
     else { posTau = 0.06; lookTau = 0.04; upTau = 0.06; }
-  } else if (game.camMode === 2 && plane.alive) {
-    // Overhead tactical view (inspired by classic pixel-art 3D flight top-down).
+  } else if (game.camMode === 2) {
+    // Overhead tactical view (stays smoothly centered over crash site too).
     const hFwd = vnorm([-Math.sin(plane.yaw), 0, -Math.cos(plane.yaw)]);
     const alt = 104 + plane.boost * 18;
     eye = [plane.pos[0] - hFwd[0] * 24, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 24];
@@ -3000,7 +3007,7 @@ function updateCamera(dt) {
     upv = hFwd;
     fov = 52 + plane.boost * 5;
     posTau = 0.13; lookTau = 0.09; upTau = 0.13;
-    if (game.state === 'play') {
+    if (game.state === 'play' && plane.alive) {
       eye = vadd(eye, vmul(plane.vel, posTau));
       look = vadd(look, vmul(plane.vel, lookTau));
     }
@@ -3021,12 +3028,7 @@ function updateCamera(dt) {
     eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 5.2), vmul(right, cam.sway)));
     look = vadd(plane.pos, vadd(vmul(fwd, 74), vadd(vmul(up, 2.1), vmul(right, cam.sway * 0.35))));
     upv = blend; fov = 62 + plane.boost * 12 + Math.abs(plane.inRoll) * 3.2;
-    if (game.state === 'results' || game.state === 'upgrade') {
-      game.camAngle += dt * 0.22;
-      eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
-      look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
-      snap = true;
-    } else if (game.state === 'play' && plane.alive) {
+    if (game.state === 'play' && plane.alive) {
       const vel = plane.vel;
       eye = vadd(eye, vmul(vel, posTau));
       look = vadd(look, vmul(vel, lookTau));
@@ -3078,6 +3080,7 @@ function startGame() {
   missiles.length = 0; smokeP.length = 0; glowP.length = 0; pops.length = 0;
   tracers.length = 0; enemies.length = 0; ebullets.length = 0;
   resetWeapons(); respawnPlane();
+  resetDoubleTap();
   plane.dead = false;
   startWave(1);
   audio.init(); audio.beep(680);
@@ -3103,6 +3106,7 @@ function onEnter() {
 }
 function restart() { audio.init(); startGame(); }
 function togglePause() {
+  resetDoubleTap();
   if (game.state === 'play') { game.state = 'pause'; audio.beep(300); }
   else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
 }
@@ -3143,7 +3147,6 @@ function update(dt) {
     }
   } else if (game.state === 'upgrade' || game.state === 'results') {
     updateParticles(dt);
-    if (game.state === 'upgrade') updateCamera(dt);
   }
   updateCamera(dt);
 }
@@ -3253,17 +3256,19 @@ function drawShadows() {
     const off = Math.min(c.y * 0.65, 220);
     const sx = cx - SUN_DIR[0] * off;
     const sz = c.z - SUN_DIR[2] * off;
+    const dx = sx - cam.pos[0], dz = sz - cam.pos[2];
+    if (dx * dx + dz * dz > 2800 * 2800) continue;
+    const rad = c.sx * 0.92, rz = c.sy * 1.45;
     const gh = terrainHeight(sx, sz);
     if (gh > 42) continue;
     const sy = Math.max(gh, 0) + 0.55;
-    const rad = c.sx * 0.92;
-    if (!sphereInFrustum(sx, sy, sz, rad)) continue;
-    const dist = Math.hypot(sx - cam.pos[0], sy - cam.pos[1], sz - cam.pos[2]);
+    if (!sphereInFrustum(sx, sy, sz, Math.max(rad, rz))) continue;
+    const dist = Math.hypot(dx, sy - cam.pos[1], dz);
     if (dist > 2800) continue;
     const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
     if (alpha < 0.02) continue;
     m4id(shadowM);
-    shadowM[0] = rad; shadowM[10] = c.sy * 1.45;
+    shadowM[0] = rad; shadowM[10] = rz;
     shadowM[12] = sx; shadowM[13] = sy; shadowM[14] = sz;
     gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
     gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
@@ -3354,13 +3359,18 @@ function drawTrails() {
       const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
       const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
       let o = q * 42;
-      const putV = (x, y, z, al) => {
-        trailData[o] = x; trailData[o + 1] = y; trailData[o + 2] = z;
-        trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = al;
-        o += 7;
-      };
-      putV(ax0, ay0, az0, aa); putV(ax1, ay1, az1, aa); putV(bx1, by1, bz1, ab);
-      putV(ax0, ay0, az0, aa); putV(bx1, by1, bz1, ab); putV(bx0, by0, bz0, ab);
+      trailData[o] = ax0; trailData[o + 1] = ay0; trailData[o + 2] = az0;
+      trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = aa;
+      trailData[o + 7] = ax1; trailData[o + 8] = ay1; trailData[o + 9] = az1;
+      trailData[o + 10] = 1.0; trailData[o + 11] = 0.96; trailData[o + 12] = 0.90; trailData[o + 13] = aa;
+      trailData[o + 14] = bx1; trailData[o + 15] = by1; trailData[o + 16] = bz1;
+      trailData[o + 17] = 1.0; trailData[o + 18] = 0.96; trailData[o + 19] = 0.90; trailData[o + 20] = ab;
+      trailData[o + 21] = ax0; trailData[o + 22] = ay0; trailData[o + 23] = az0;
+      trailData[o + 24] = 1.0; trailData[o + 25] = 0.96; trailData[o + 26] = 0.90; trailData[o + 27] = aa;
+      trailData[o + 28] = bx1; trailData[o + 29] = by1; trailData[o + 30] = bz1;
+      trailData[o + 31] = 1.0; trailData[o + 32] = 0.96; trailData[o + 33] = 0.90; trailData[o + 34] = ab;
+      trailData[o + 35] = bx0; trailData[o + 36] = by0; trailData[o + 37] = bz0;
+      trailData[o + 38] = 1.0; trailData[o + 39] = 0.96; trailData[o + 40] = 0.90; trailData[o + 41] = ab;
       q++;
     }
   }
@@ -3411,6 +3421,7 @@ function drawEnemies() {
   gl.uniform3fv(U(solidProg, 'uSunColor'), SOLID_SUN);
 }
 
+const cloudTint = new Float32Array(3);
 function drawClouds() {
   gl.useProgram(cloudProg);
   gl.uniformMatrix4fv(U(cloudProg, 'uVP'), false, vpM);
@@ -3421,7 +3432,6 @@ function drawClouds() {
   gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
-  const tint = new Float32Array(3);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
@@ -3431,8 +3441,8 @@ function drawClouds() {
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    tint[0] = 1.0; tint[1] = c.tintY + 0.08; tint[2] = 0.78;
-    gl.uniform3fv(U(cloudProg, 'uTint'), tint);
+    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.08; cloudTint[2] = 0.78;
+    gl.uniform3fv(U(cloudProg, 'uTint'), cloudTint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
@@ -3595,7 +3605,7 @@ function renderScene() {
   if (showJet) drawJet();
   drawEnemies();
   drawClouds();
-  if (showJet || game.state === 'title') drawTrails();
+  if (game.state === 'title' || game.camMode !== 1) drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);
@@ -3668,7 +3678,8 @@ function drawTargetBox() {
   const t = lock ? { e: lock, dist: vdist(lock.pos, plane.pos) } : bestTarget();
   if (!t) return;
   const p = projPoint(vpM, t.e.pos);
-  if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > H - 22) return;
+  const botLimit = game.camMode === 1 ? H - 92 : H - 22;
+  if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > botLimit) return;
   const x = Math.round(p[0]), y = Math.round(p[1]);
   const boss = t.e.type === 'carrier';
   const s = boss ? 12 : lock ? 6 : 7;
@@ -3815,12 +3826,19 @@ function drawTitleScreen() {
 }
 
 /* ---------- cockpit (pixel-art canopy, HUD combiner & instrument dash) ---------- */
+function cockpitHorizon() {
+  const inv = Math.cos(plane.pitch) < 0;
+  const pitchEff = Math.asin(clamp(Math.sin(plane.pitch), -1, 1));
+  const roll = planeVisualRoll() + (inv ? Math.PI : 0);
+  return { roll, pitchEff };
+}
+
 function drawCockpitProjector() {
-  const ox = Math.round(cam.cockpitX * 0.45);
-  const oy = Math.round(cam.cockpitY * 0.45);
-  const gx = 160 + ox, gy = 48 + oy, gw = 160, gh = 114;
+  const ox = Math.round(cam.cockpitX * 0.4);
+  const oy = Math.round(cam.cockpitY * 0.4);
+  const gx = 152 + ox, gy = 60 + oy, gw = 176, gh = 116;
   const cx = gx + gw / 2, cy = gy + gh / 2;
-  const roll = planeVisualRoll();
+  const { roll, pitchEff } = cockpitHorizon();
 
   // Translucent holographic HUD combiner glass pane.
   hud.fillStyle = 'rgba(130,245,195,0.08)';
@@ -3838,45 +3856,47 @@ function drawCockpitProjector() {
   hud.rect(gx + 1, gy + 1, gw - 2, gh - 2);
   hud.clip();
 
-  // Rotating/pitching artificial horizon & pitch ladder inside glass.
+  // Rotating/pitching artificial horizon & pitch ladder aligned to the 3D horizon.
   hud.save();
-  hud.translate(cx, cy + clamp(plane.pitch * 95, -90, 90));
-  hud.rotate(-roll);
+  hud.translate(cx, cy);
+  hud.rotate(roll);
+  const pShift = Math.round(clamp(pitchEff * 85, -80, 80));
   // Horizon bar
   hud.fillStyle = 'rgba(110,255,170,0.72)';
-  hud.fillRect(-52, 0, 36, 1); hud.fillRect(16, 0, 36, 1);
-  hud.fillRect(-52, 0, 1, 4); hud.fillRect(51, 0, 1, 4);
+  hud.fillRect(-48, pShift, 32, 1); hud.fillRect(16, pShift, 32, 1);
+  hud.fillRect(-48, pShift, 1, 4); hud.fillRect(47, pShift, 1, 4);
   // Pitch rungs (+15, +30, -15, -30)
   for (const deg of [-30, -15, 15, 30]) {
-    const py = Math.round(-deg * 1.45);
+    const py = pShift + Math.round(-deg * 1.45);
     hud.fillStyle = 'rgba(110,255,170,0.45)';
     if (deg > 0) {
-      hud.fillRect(-26, py, 14, 1); hud.fillRect(12, py, 14, 1);
-      hud.fillRect(-26, py, 1, 3); hud.fillRect(25, py, 1, 3);
+      hud.fillRect(-24, py, 12, 1); hud.fillRect(12, py, 12, 1);
+      hud.fillRect(-24, py, 1, 3); hud.fillRect(23, py, 1, 3);
     } else {
       for (let d = 0; d < 12; d += 4) {
-        hud.fillRect(-26 + d, py, 2, 1);
+        hud.fillRect(-24 + d, py, 2, 1);
         hud.fillRect(12 + d, py, 2, 1);
       }
-      hud.fillRect(-26, py - 2, 1, 3); hud.fillRect(25, py - 2, 1, 3);
+      hud.fillRect(-24, py - 2, 1, 3); hud.fillRect(23, py - 2, 1, 3);
     }
   }
   hud.restore();
 
-  // Left vertical speed tape & right vertical altitude tape.
+  // Left vertical speed tape & right vertical altitude tape (cleanly clear of digits).
+  const ltX = gx + 30, rtX = gx + gw - 31;
   hud.fillStyle = 'rgba(110,255,170,0.58)';
-  hud.fillRect(gx + 16, gy + 16, 1, gh - 32);
-  hud.fillRect(gx + gw - 17, gy + 16, 1, gh - 32);
-  const spdOff = Math.floor(plane.speed * 0.4) % 10;
-  const altOff = Math.floor(plane.agl * 0.6) % 10;
+  hud.fillRect(ltX, gy + 16, 1, gh - 32);
+  hud.fillRect(rtX, gy + 16, 1, gh - 32);
+  const spdOff = ((Math.floor(plane.speed * 0.4) % 10) + 10) % 10;
+  const altOff = ((Math.floor(Math.max(0, plane.agl) * 0.6) % 10) + 10) % 10;
   for (let i = 0; i < 8; i++) {
-    const sy = gy + 20 + i * 10 + (spdOff % 10);
-    const ay = gy + 20 + i * 10 + (altOff % 10);
-    if (sy > gy + 16 && sy < gy + gh - 16) hud.fillRect(gx + 12, sy, 4, 1);
-    if (ay > gy + 16 && ay < gy + gh - 16) hud.fillRect(gx + gw - 16, ay, 4, 1);
+    const sy = gy + 20 + i * 10 + spdOff;
+    const ay = gy + 20 + i * 10 + altOff;
+    if (sy > gy + 16 && sy < gy + gh - 16) hud.fillRect(ltX - 4, sy, 4, 1);
+    if (ay > gy + 16 && ay < gy + gh - 16) hud.fillRect(rtX + 1, ay, 4, 1);
   }
-  drawText(String(Math.round(plane.speed * 2.2)), gx + 4, cy - 3, '#72ffb0', 1, 0);
-  drawTextR(String(Math.round(Math.max(0, plane.agl * 12))), gx + gw - 4, cy - 3, '#72ffb0', 1, 0);
+  drawText(String(Math.round(plane.speed * 2.2)), gx + 3, cy - 3, '#72ffb0', 1, 0);
+  drawTextR(String(Math.round(Math.max(0, plane.agl * 12))), gx + gw - 3, cy - 3, '#72ffb0', 1, 0);
 
   // Top heading compass tape inside combiner.
   const hdg = (((-plane.yaw * 180 / Math.PI) % 360) + 360) % 360;
@@ -3884,19 +3904,25 @@ function drawCockpitProjector() {
   hud.fillRect(cx - 42, gy + 11, 84, 1);
   hud.fillRect(cx, gy + 12, 1, 3);
   drawTextC(pad(hdg, 3), cx, gy + 3, '#72ffb0', 1, 0);
-
-  // Center boresight chevron.
-  hud.fillStyle = 'rgba(120,255,175,0.92)';
-  hud.fillRect(cx - 7, cy, 4, 1); hud.fillRect(cx + 4, cy, 4, 1);
-  hud.fillRect(cx - 3, cy + 1, 2, 1); hud.fillRect(cx + 2, cy + 1, 2, 1);
-  hud.fillRect(cx, cy + 2, 1, 1);
   hud.restore();
+
+  // True cannon boresight chevron projected along flightForward() (independent of combiner sway).
+  const fwd = flightForward();
+  const aimP = projPoint(vpM, vadd(plane.pos, vmul(fwd, 1000)));
+  const ax = Math.round(aimP ? aimP[0] : 240);
+  const ay = Math.round(aimP ? aimP[1] : 135);
+  hud.fillStyle = 'rgba(120,255,175,0.95)';
+  hud.fillRect(ax - 8, ay, 5, 1); hud.fillRect(ax + 4, ay, 5, 1);
+  hud.fillRect(ax - 3, ay + 1, 2, 1); hud.fillRect(ax + 2, ay + 1, 2, 1);
+  hud.fillRect(ax, ay - 4, 1, 3); hud.fillRect(ax, ay + 2, 1, 2);
+  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  hud.fillRect(ax, ay, 1, 1);
 }
 
 function drawCockpitFrame() {
   const ox = Math.round(cam.cockpitX);
   const oy = Math.round(cam.cockpitY);
-  const roll = planeVisualRoll();
+  const { roll, pitchEff } = cockpitHorizon();
 
   // 1) Curved metallic canopy arch sweeping around the windshield.
   hud.save();
@@ -4029,16 +4055,17 @@ function drawCockpitFrame() {
   hud.strokeStyle = '#505872';
   hud.lineWidth = 2;
   hud.beginPath(); hud.arc(acx, acy, ar + 3, 0, TAU); hud.stroke();
+  hud.lineWidth = 1;
   hud.fillStyle = '#8b95b0';
   for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
     hud.fillRect(acx + sx * (ar + 1) - 1, acy + sy * (ar + 1) - 1, 2, 2);
   }
-  // Clipped rotating pitch/roll horizon sphere
+  // Clipped rotating pitch/roll horizon sphere (aligned to 3D horizon & loops)
   hud.save();
   hud.beginPath(); hud.arc(acx, acy, ar, 0, TAU); hud.clip();
   hud.translate(acx, acy);
-  hud.rotate(-roll);
-  const pShift = clamp(plane.pitch * 36, -ar, ar);
+  hud.rotate(roll);
+  const pShift = clamp(pitchEff * 36, -ar, ar);
   // Sky hemisphere (warm dusk sky blue -> peach horizon)
   hud.fillStyle = '#2d6ea8';
   hud.fillRect(-ar - 10, -ar - 40 + pShift, (ar + 10) * 2, ar + 40);
@@ -4230,7 +4257,7 @@ function drawPlayHUD() {
   }
 
   if (plane.alive) {
-    let wy = 46;
+    let wy = (campaign.boss && campaign.boss.alive) ? 50 : (fpv ? 34 : 46);
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);

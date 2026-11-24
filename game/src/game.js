@@ -52,7 +52,6 @@ function updateTrails(dt) {
   trailSampleT = 0.016;
   planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
   const rx = camMat[0], ry = camMat[1], rz = camMat[2];
-  const ux = camMat[4], uy = camMat[5], uz = camMat[6];
   const fx = -camMat[8], fy = -camMat[9], fz = -camMat[10];
   const gFactor = clamp(Math.abs(plane.inRoll) * 0.95 + Math.abs(plane.bankVel) * 0.25 + Math.abs(plane.inPitch) * 0.65 + (plane.barrelT > 0 ? 1.0 : 0) + plane.boost * 0.75, 0, 1.2);
   const w = 0.08 + Math.min(1, gFactor) * 0.07;
@@ -66,8 +65,6 @@ function updateTrails(dt) {
         plane.pos[1] + ry * (4.92 * sign) - fy * 2.05,
         plane.pos[2] + rz * (4.92 * sign) - fz * 2.05
       ],
-      u: [ux, uy, uz],
-      r: [rx, ry, rz],
       w, a: alpha, age: 0
     });
     if (tr.length > TRAIL_MAX) tr.shift();
@@ -185,6 +182,7 @@ function crash(killed) {
   if (!plane.alive) return;
   if (game.camMode === 1) { game.camMode = 0; cam.snap = true; }
   plane.alive = false;
+  plane.barrel = 0; plane.barrelT = 0;
   explode(plane.pos, 2.0);
   game.shake = 1.4; game.lock = null;
   audio.explosion();
@@ -210,7 +208,7 @@ function respawnPlane() {
   game.shield = game.mods.shieldMax;
   game.shieldT = 0;
   clearTrails();
-  cam.snap = true; cam.transT = 0; cam.sway = 0;
+  cam.snap = true; cam.transT = 0; cam.sway = 0; cam.cockpitX = 0; cam.cockpitY = 0;
 }
 
 /* ---------- plane ---------- */
@@ -331,6 +329,11 @@ function updateCamera(dt) {
     look = vadd(plane.pos, [0, -14, 0]);
     upv = [0, 1, 0]; fov = 56;
     snap = true;
+  } else if (game.state === 'results' || game.state === 'upgrade') {
+    game.camAngle += dt * 0.22;
+    eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
+    look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
+    snap = true;
   } else if (game.camMode === 1 && plane.alive) {
     // FPV Cockpit camera: follows full roll + barrel + G-force head bob.
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
@@ -343,8 +346,8 @@ function updateCamera(dt) {
     cam.cockpitY = lerp(cam.cockpitY, clamp(plane.inPitch * 3.5 + plane.boost * 2.2, -5, 6), 1 - Math.exp(-dt * 12));
     if (cam.transT <= 0.02) snap = true;
     else { posTau = 0.06; lookTau = 0.04; upTau = 0.06; }
-  } else if (game.camMode === 2 && plane.alive) {
-    // Overhead tactical view (inspired by classic pixel-art 3D flight top-down).
+  } else if (game.camMode === 2) {
+    // Overhead tactical view (stays smoothly centered over crash site too).
     const hFwd = vnorm([-Math.sin(plane.yaw), 0, -Math.cos(plane.yaw)]);
     const alt = 104 + plane.boost * 18;
     eye = [plane.pos[0] - hFwd[0] * 24, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 24];
@@ -352,7 +355,7 @@ function updateCamera(dt) {
     upv = hFwd;
     fov = 52 + plane.boost * 5;
     posTau = 0.13; lookTau = 0.09; upTau = 0.13;
-    if (game.state === 'play') {
+    if (game.state === 'play' && plane.alive) {
       eye = vadd(eye, vmul(plane.vel, posTau));
       look = vadd(look, vmul(plane.vel, lookTau));
     }
@@ -373,12 +376,7 @@ function updateCamera(dt) {
     eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 5.2), vmul(right, cam.sway)));
     look = vadd(plane.pos, vadd(vmul(fwd, 74), vadd(vmul(up, 2.1), vmul(right, cam.sway * 0.35))));
     upv = blend; fov = 62 + plane.boost * 12 + Math.abs(plane.inRoll) * 3.2;
-    if (game.state === 'results' || game.state === 'upgrade') {
-      game.camAngle += dt * 0.22;
-      eye = [plane.pos[0] + Math.cos(game.camAngle) * 31, plane.pos[1] + 8, plane.pos[2] + Math.sin(game.camAngle) * 31];
-      look = vadd(plane.pos, [0, 1, 0]); upv = [0, 1, 0]; fov = 56;
-      snap = true;
-    } else if (game.state === 'play' && plane.alive) {
+    if (game.state === 'play' && plane.alive) {
       const vel = plane.vel;
       eye = vadd(eye, vmul(vel, posTau));
       look = vadd(look, vmul(vel, lookTau));
@@ -430,6 +428,7 @@ function startGame() {
   missiles.length = 0; smokeP.length = 0; glowP.length = 0; pops.length = 0;
   tracers.length = 0; enemies.length = 0; ebullets.length = 0;
   resetWeapons(); respawnPlane();
+  resetDoubleTap();
   plane.dead = false;
   startWave(1);
   audio.init(); audio.beep(680);
@@ -455,6 +454,7 @@ function onEnter() {
 }
 function restart() { audio.init(); startGame(); }
 function togglePause() {
+  resetDoubleTap();
   if (game.state === 'play') { game.state = 'pause'; audio.beep(300); }
   else if (game.state === 'pause') { game.state = 'play'; audio.beep(620); }
 }
@@ -495,7 +495,6 @@ function update(dt) {
     }
   } else if (game.state === 'upgrade' || game.state === 'results') {
     updateParticles(dt);
-    if (game.state === 'upgrade') updateCamera(dt);
   }
   updateCamera(dt);
 }

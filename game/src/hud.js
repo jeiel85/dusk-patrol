@@ -47,7 +47,8 @@ function drawTargetBox() {
   const t = lock ? { e: lock, dist: vdist(lock.pos, plane.pos) } : bestTarget();
   if (!t) return;
   const p = projPoint(vpM, t.e.pos);
-  if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > H - 22) return;
+  const botLimit = game.camMode === 1 ? H - 92 : H - 22;
+  if (!p || p[0] < 8 || p[0] > W - 8 || p[1] < 18 || p[1] > botLimit) return;
   const x = Math.round(p[0]), y = Math.round(p[1]);
   const boss = t.e.type === 'carrier';
   const s = boss ? 12 : lock ? 6 : 7;
@@ -194,12 +195,19 @@ function drawTitleScreen() {
 }
 
 /* ---------- cockpit (pixel-art canopy, HUD combiner & instrument dash) ---------- */
+function cockpitHorizon() {
+  const inv = Math.cos(plane.pitch) < 0;
+  const pitchEff = Math.asin(clamp(Math.sin(plane.pitch), -1, 1));
+  const roll = planeVisualRoll() + (inv ? Math.PI : 0);
+  return { roll, pitchEff };
+}
+
 function drawCockpitProjector() {
-  const ox = Math.round(cam.cockpitX * 0.45);
-  const oy = Math.round(cam.cockpitY * 0.45);
-  const gx = 160 + ox, gy = 48 + oy, gw = 160, gh = 114;
+  const ox = Math.round(cam.cockpitX * 0.4);
+  const oy = Math.round(cam.cockpitY * 0.4);
+  const gx = 152 + ox, gy = 60 + oy, gw = 176, gh = 116;
   const cx = gx + gw / 2, cy = gy + gh / 2;
-  const roll = planeVisualRoll();
+  const { roll, pitchEff } = cockpitHorizon();
 
   // Translucent holographic HUD combiner glass pane.
   hud.fillStyle = 'rgba(130,245,195,0.08)';
@@ -217,45 +225,47 @@ function drawCockpitProjector() {
   hud.rect(gx + 1, gy + 1, gw - 2, gh - 2);
   hud.clip();
 
-  // Rotating/pitching artificial horizon & pitch ladder inside glass.
+  // Rotating/pitching artificial horizon & pitch ladder aligned to the 3D horizon.
   hud.save();
-  hud.translate(cx, cy + clamp(plane.pitch * 95, -90, 90));
-  hud.rotate(-roll);
+  hud.translate(cx, cy);
+  hud.rotate(roll);
+  const pShift = Math.round(clamp(pitchEff * 85, -80, 80));
   // Horizon bar
   hud.fillStyle = 'rgba(110,255,170,0.72)';
-  hud.fillRect(-52, 0, 36, 1); hud.fillRect(16, 0, 36, 1);
-  hud.fillRect(-52, 0, 1, 4); hud.fillRect(51, 0, 1, 4);
+  hud.fillRect(-48, pShift, 32, 1); hud.fillRect(16, pShift, 32, 1);
+  hud.fillRect(-48, pShift, 1, 4); hud.fillRect(47, pShift, 1, 4);
   // Pitch rungs (+15, +30, -15, -30)
   for (const deg of [-30, -15, 15, 30]) {
-    const py = Math.round(-deg * 1.45);
+    const py = pShift + Math.round(-deg * 1.45);
     hud.fillStyle = 'rgba(110,255,170,0.45)';
     if (deg > 0) {
-      hud.fillRect(-26, py, 14, 1); hud.fillRect(12, py, 14, 1);
-      hud.fillRect(-26, py, 1, 3); hud.fillRect(25, py, 1, 3);
+      hud.fillRect(-24, py, 12, 1); hud.fillRect(12, py, 12, 1);
+      hud.fillRect(-24, py, 1, 3); hud.fillRect(23, py, 1, 3);
     } else {
       for (let d = 0; d < 12; d += 4) {
-        hud.fillRect(-26 + d, py, 2, 1);
+        hud.fillRect(-24 + d, py, 2, 1);
         hud.fillRect(12 + d, py, 2, 1);
       }
-      hud.fillRect(-26, py - 2, 1, 3); hud.fillRect(25, py - 2, 1, 3);
+      hud.fillRect(-24, py - 2, 1, 3); hud.fillRect(23, py - 2, 1, 3);
     }
   }
   hud.restore();
 
-  // Left vertical speed tape & right vertical altitude tape.
+  // Left vertical speed tape & right vertical altitude tape (cleanly clear of digits).
+  const ltX = gx + 30, rtX = gx + gw - 31;
   hud.fillStyle = 'rgba(110,255,170,0.58)';
-  hud.fillRect(gx + 16, gy + 16, 1, gh - 32);
-  hud.fillRect(gx + gw - 17, gy + 16, 1, gh - 32);
-  const spdOff = Math.floor(plane.speed * 0.4) % 10;
-  const altOff = Math.floor(plane.agl * 0.6) % 10;
+  hud.fillRect(ltX, gy + 16, 1, gh - 32);
+  hud.fillRect(rtX, gy + 16, 1, gh - 32);
+  const spdOff = ((Math.floor(plane.speed * 0.4) % 10) + 10) % 10;
+  const altOff = ((Math.floor(Math.max(0, plane.agl) * 0.6) % 10) + 10) % 10;
   for (let i = 0; i < 8; i++) {
-    const sy = gy + 20 + i * 10 + (spdOff % 10);
-    const ay = gy + 20 + i * 10 + (altOff % 10);
-    if (sy > gy + 16 && sy < gy + gh - 16) hud.fillRect(gx + 12, sy, 4, 1);
-    if (ay > gy + 16 && ay < gy + gh - 16) hud.fillRect(gx + gw - 16, ay, 4, 1);
+    const sy = gy + 20 + i * 10 + spdOff;
+    const ay = gy + 20 + i * 10 + altOff;
+    if (sy > gy + 16 && sy < gy + gh - 16) hud.fillRect(ltX - 4, sy, 4, 1);
+    if (ay > gy + 16 && ay < gy + gh - 16) hud.fillRect(rtX + 1, ay, 4, 1);
   }
-  drawText(String(Math.round(plane.speed * 2.2)), gx + 4, cy - 3, '#72ffb0', 1, 0);
-  drawTextR(String(Math.round(Math.max(0, plane.agl * 12))), gx + gw - 4, cy - 3, '#72ffb0', 1, 0);
+  drawText(String(Math.round(plane.speed * 2.2)), gx + 3, cy - 3, '#72ffb0', 1, 0);
+  drawTextR(String(Math.round(Math.max(0, plane.agl * 12))), gx + gw - 3, cy - 3, '#72ffb0', 1, 0);
 
   // Top heading compass tape inside combiner.
   const hdg = (((-plane.yaw * 180 / Math.PI) % 360) + 360) % 360;
@@ -263,19 +273,25 @@ function drawCockpitProjector() {
   hud.fillRect(cx - 42, gy + 11, 84, 1);
   hud.fillRect(cx, gy + 12, 1, 3);
   drawTextC(pad(hdg, 3), cx, gy + 3, '#72ffb0', 1, 0);
-
-  // Center boresight chevron.
-  hud.fillStyle = 'rgba(120,255,175,0.92)';
-  hud.fillRect(cx - 7, cy, 4, 1); hud.fillRect(cx + 4, cy, 4, 1);
-  hud.fillRect(cx - 3, cy + 1, 2, 1); hud.fillRect(cx + 2, cy + 1, 2, 1);
-  hud.fillRect(cx, cy + 2, 1, 1);
   hud.restore();
+
+  // True cannon boresight chevron projected along flightForward() (independent of combiner sway).
+  const fwd = flightForward();
+  const aimP = projPoint(vpM, vadd(plane.pos, vmul(fwd, 1000)));
+  const ax = Math.round(aimP ? aimP[0] : 240);
+  const ay = Math.round(aimP ? aimP[1] : 135);
+  hud.fillStyle = 'rgba(120,255,175,0.95)';
+  hud.fillRect(ax - 8, ay, 5, 1); hud.fillRect(ax + 4, ay, 5, 1);
+  hud.fillRect(ax - 3, ay + 1, 2, 1); hud.fillRect(ax + 2, ay + 1, 2, 1);
+  hud.fillRect(ax, ay - 4, 1, 3); hud.fillRect(ax, ay + 2, 1, 2);
+  hud.fillStyle = 'rgba(255,180,92,0.95)';
+  hud.fillRect(ax, ay, 1, 1);
 }
 
 function drawCockpitFrame() {
   const ox = Math.round(cam.cockpitX);
   const oy = Math.round(cam.cockpitY);
-  const roll = planeVisualRoll();
+  const { roll, pitchEff } = cockpitHorizon();
 
   // 1) Curved metallic canopy arch sweeping around the windshield.
   hud.save();
@@ -408,16 +424,17 @@ function drawCockpitFrame() {
   hud.strokeStyle = '#505872';
   hud.lineWidth = 2;
   hud.beginPath(); hud.arc(acx, acy, ar + 3, 0, TAU); hud.stroke();
+  hud.lineWidth = 1;
   hud.fillStyle = '#8b95b0';
   for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
     hud.fillRect(acx + sx * (ar + 1) - 1, acy + sy * (ar + 1) - 1, 2, 2);
   }
-  // Clipped rotating pitch/roll horizon sphere
+  // Clipped rotating pitch/roll horizon sphere (aligned to 3D horizon & loops)
   hud.save();
   hud.beginPath(); hud.arc(acx, acy, ar, 0, TAU); hud.clip();
   hud.translate(acx, acy);
-  hud.rotate(-roll);
-  const pShift = clamp(plane.pitch * 36, -ar, ar);
+  hud.rotate(roll);
+  const pShift = clamp(pitchEff * 36, -ar, ar);
   // Sky hemisphere (warm dusk sky blue -> peach horizon)
   hud.fillStyle = '#2d6ea8';
   hud.fillRect(-ar - 10, -ar - 40 + pShift, (ar + 10) * 2, ar + 40);
@@ -609,7 +626,7 @@ function drawPlayHUD() {
   }
 
   if (plane.alive) {
-    let wy = 46;
+    let wy = (campaign.boss && campaign.boss.alive) ? 50 : (fpv ? 34 : 46);
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);

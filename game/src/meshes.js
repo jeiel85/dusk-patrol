@@ -268,12 +268,14 @@ function buildFin(sign) {
     );
   }
   jet.quad(p0, p1, [p2[0] - sign * 0.04, 1.75, 4.95], [p3[0] - sign * 0.04, 1.75, 3.95], JET_EDGE, [sign, 0.3, 0]);
-  // Tail fin tip accent.
-  jet.quad(
-    [0.86 * sign, 1.48, 3.82], [0.86 * sign, 1.48, 4.90],
-    [0.98 * sign, 1.75, 4.95], [0.98 * sign, 1.75, 3.95],
-    JET_ORANGE, [sign, 0.25, 0]
-  );
+  // Tail fin tip accent offset outside both fin faces so it renders cleanly.
+  for (const off of [-0.046, 0.046]) {
+    jet.quad(
+      [0.86 * sign + off, 1.48, 3.82], [0.86 * sign + off, 1.48, 4.90],
+      [0.98 * sign + off, 1.75, 4.95], [0.98 * sign + off, 1.75, 3.95],
+      JET_ORANGE, [off > 0 ? 1 : -1, 0.25, 0]
+    );
+  }
 }
 buildFin(1); buildFin(-1);
 

@@ -102,17 +102,19 @@ function drawShadows() {
     const off = Math.min(c.y * 0.65, 220);
     const sx = cx - SUN_DIR[0] * off;
     const sz = c.z - SUN_DIR[2] * off;
+    const dx = sx - cam.pos[0], dz = sz - cam.pos[2];
+    if (dx * dx + dz * dz > 2800 * 2800) continue;
+    const rad = c.sx * 0.92, rz = c.sy * 1.45;
     const gh = terrainHeight(sx, sz);
     if (gh > 42) continue;
     const sy = Math.max(gh, 0) + 0.55;
-    const rad = c.sx * 0.92;
-    if (!sphereInFrustum(sx, sy, sz, rad)) continue;
-    const dist = Math.hypot(sx - cam.pos[0], sy - cam.pos[1], sz - cam.pos[2]);
+    if (!sphereInFrustum(sx, sy, sz, Math.max(rad, rz))) continue;
+    const dist = Math.hypot(dx, sy - cam.pos[1], dz);
     if (dist > 2800) continue;
     const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
     if (alpha < 0.02) continue;
     m4id(shadowM);
-    shadowM[0] = rad; shadowM[10] = c.sy * 1.45;
+    shadowM[0] = rad; shadowM[10] = rz;
     shadowM[12] = sx; shadowM[13] = sy; shadowM[14] = sz;
     gl.uniformMatrix4fv(U(shadowProg, 'uModel'), false, shadowM);
     gl.uniform1f(U(shadowProg, 'uAlpha'), alpha);
@@ -203,13 +205,18 @@ function drawTrails() {
       const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
       const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
       let o = q * 42;
-      const putV = (x, y, z, al) => {
-        trailData[o] = x; trailData[o + 1] = y; trailData[o + 2] = z;
-        trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = al;
-        o += 7;
-      };
-      putV(ax0, ay0, az0, aa); putV(ax1, ay1, az1, aa); putV(bx1, by1, bz1, ab);
-      putV(ax0, ay0, az0, aa); putV(bx1, by1, bz1, ab); putV(bx0, by0, bz0, ab);
+      trailData[o] = ax0; trailData[o + 1] = ay0; trailData[o + 2] = az0;
+      trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = aa;
+      trailData[o + 7] = ax1; trailData[o + 8] = ay1; trailData[o + 9] = az1;
+      trailData[o + 10] = 1.0; trailData[o + 11] = 0.96; trailData[o + 12] = 0.90; trailData[o + 13] = aa;
+      trailData[o + 14] = bx1; trailData[o + 15] = by1; trailData[o + 16] = bz1;
+      trailData[o + 17] = 1.0; trailData[o + 18] = 0.96; trailData[o + 19] = 0.90; trailData[o + 20] = ab;
+      trailData[o + 21] = ax0; trailData[o + 22] = ay0; trailData[o + 23] = az0;
+      trailData[o + 24] = 1.0; trailData[o + 25] = 0.96; trailData[o + 26] = 0.90; trailData[o + 27] = aa;
+      trailData[o + 28] = bx1; trailData[o + 29] = by1; trailData[o + 30] = bz1;
+      trailData[o + 31] = 1.0; trailData[o + 32] = 0.96; trailData[o + 33] = 0.90; trailData[o + 34] = ab;
+      trailData[o + 35] = bx0; trailData[o + 36] = by0; trailData[o + 37] = bz0;
+      trailData[o + 38] = 1.0; trailData[o + 39] = 0.96; trailData[o + 40] = 0.90; trailData[o + 41] = ab;
       q++;
     }
   }
@@ -260,6 +267,7 @@ function drawEnemies() {
   gl.uniform3fv(U(solidProg, 'uSunColor'), SOLID_SUN);
 }
 
+const cloudTint = new Float32Array(3);
 function drawClouds() {
   gl.useProgram(cloudProg);
   gl.uniformMatrix4fv(U(cloudProg, 'uVP'), false, vpM);
@@ -270,7 +278,6 @@ function drawClouds() {
   gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
-  const tint = new Float32Array(3);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
@@ -280,8 +287,8 @@ function drawClouds() {
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    tint[0] = 1.0; tint[1] = c.tintY + 0.08; tint[2] = 0.78;
-    gl.uniform3fv(U(cloudProg, 'uTint'), tint);
+    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.08; cloudTint[2] = 0.78;
+    gl.uniform3fv(U(cloudProg, 'uTint'), cloudTint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
@@ -444,7 +451,7 @@ function renderScene() {
   if (showJet) drawJet();
   drawEnemies();
   drawClouds();
-  if (showJet || game.state === 'title') drawTrails();
+  if (game.state === 'title' || game.camMode !== 1) drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);
