@@ -28,34 +28,31 @@ void main(){
   vec3 dir = normalize(uFwd + uRight*p.x*uTanFov*uAspect + uUp*p.y*uTanFov);
   float y = dir.y;
   float t = clamp(y, 0.0, 1.0);
-  vec3 zenith = vec3(0.135,0.10,0.27);
-  vec3 mid    = vec3(0.46,0.26,0.44);
-  vec3 horizon= vec3(0.97,0.62,0.42);
-  vec3 col = mix(horizon, mid, smoothstep(0.0,0.30,t));
-  col = mix(col, zenith, smoothstep(0.24,0.90,t));
-  col = mix(col, vec3(0.83,0.50,0.42), exp(-max(y,0.0)*16.0)*0.55);
+  // Pastel dusk: lilac zenith -> dusty rose -> warm cream horizon.
+  vec3 zenith = vec3(0.42,0.36,0.58);
+  vec3 mid    = vec3(0.80,0.62,0.71);
+  vec3 horizon= vec3(1.00,0.86,0.70);
+  vec3 col = mix(horizon, mid, smoothstep(0.0,0.34,t));
+  col = mix(col, zenith, smoothstep(0.28,0.98,t));
+  col = mix(col, vec3(1.00,0.79,0.62), exp(-max(y,0.0)*13.0)*0.30);
 
   float sd = max(dot(dir,uSun),0.0);
-  vec3 sunCol = vec3(1.0,0.80,0.52);
-  col += sunCol * pow(sd, 42.0) * 0.22;
-  col += sunCol * pow(sd, 220.0) * 0.85;
-  float disc = smoothstep(0.99945, 0.99978, sd);
-  col = mix(col, vec3(1.0,0.95,0.80), disc);
+  vec3 sunCol = vec3(1.0,0.88,0.62);
+  col += sunCol * pow(sd, 16.0) * 0.09;
+  col += sunCol * pow(sd, 140.0) * 0.22;
+  float disc = smoothstep(0.99870, 0.99920, sd);
+  vec3 discCol = vec3(1.0,0.95,0.74);
+  col = mix(col, discCol, disc);
+  col = mix(col, vec3(1.0,0.99,0.92), disc * smoothstep(0.9993,0.9998,sd));
 
-  vec3 sr = normalize(cross(vec3(0.0,1.0,0.0), uSun));
-  vec3 su = cross(uSun, sr);
-  float ang = atan(dot(dir,su), dot(dir,sr));
-  float ray = 0.5+0.5*sin(ang*27.0);
-  ray = pow(ray,4.0) * pow(sd,3.0) * smoothstep(0.0,0.16,y);
-  col += vec3(1.0,0.50,0.28) * ray * 0.20;
+  // Thin horizontal cloud streaks, softly dithered at the edges.
+  vec2 cuv = dir.xz / max(dir.y+0.08, 0.02);
+  float cl = noise(cuv*vec2(0.40,2.3) + vec2(uTime*0.003,0.0));
+  float band = smoothstep(0.56,0.76,cl) * smoothstep(0.02,0.10,y) * (1.0-smoothstep(0.30,0.60,y));
+  vec3 cloudCol = mix(vec3(0.94,0.72,0.76), vec3(1.0,0.88,0.76), pow(sd,2.0));
+  col = mix(col, cloudCol, band*0.38);
 
-  vec2 cuv = dir.xz / max(dir.y+0.09, 0.02);
-  float cl = noise(cuv*vec2(0.55,2.2) + vec2(uTime*0.004,0.0));
-  float band = smoothstep(0.55,0.74,cl) * smoothstep(0.015,0.16,y) * (1.0-smoothstep(0.48,0.82,y));
-  vec3 cloudCol = mix(vec3(0.98,0.58,0.55), vec3(1.0,0.84,0.66), pow(sd,2.0));
-  col = mix(col, cloudCol, band*0.5);
-
-  col = mix(vec3(0.08,0.09,0.15), col, smoothstep(-0.16, 0.0, y));
+  col = mix(vec3(0.19,0.15,0.26), col, smoothstep(-0.10, 0.0, y));
   outColor = vec4(col, 1.0);
 }`;
 
@@ -81,44 +78,39 @@ void main(){
   float h = (texture(uHeight, clamp(uv,0.001,0.999)).r*720.0-60.0);
   float depth = inside > 0.5 ? max(-h, 0.0) : 60.0;
 
-  vec3 deep = vec3(0.010,0.105,0.20);
-  vec3 shallow = vec3(0.14,0.50,0.52);
-  vec3 col = mix(shallow, deep, smoothstep(3.0,80.0,depth));
-  col = mix(col, vec3(0.07,0.30,0.39), smoothstep(70.0,240.0,depth)*0.35);
+  vec3 deep = vec3(0.05,0.21,0.42);
+  vec3 shallow = vec3(0.25,0.60,0.66);
+  vec3 col = mix(shallow, deep, smoothstep(1.0, 35.0, depth));
+  col = mix(col, vec3(0.15,0.31,0.50), smoothstep(30.0, 120.0, depth)*0.60);
 
-  vec2 q = vW.xz*0.055;
+  // Low swells only: high-frequency ripples alias into hard rays at this resolution.
+  vec2 q = vW.xz*0.020;
   float t = uTime;
-  float e = sin(q.x*1.6 + t*1.2)*0.045 + sin(q.y*2.1 - t*0.9)*0.035 + sin((q.x+q.y)*0.8 + t*0.6)*0.05;
+  float e = sin(q.x*5.0 + t*1.1)*0.004 + sin(q.y*6.3 - t*0.8)*0.0035 + sin((q.x+q.y)*3.4 + t*0.6)*0.003;
   vec3 n = normalize(vec3(e, 1.0, e*0.65));
   vec3 V = normalize(uCam - vW);
   vec3 H = normalize(uSun + V);
 
   float fres = pow(1.0-max(dot(n,V),0.0), 3.0);
-  col = mix(col, vec3(0.78,0.50,0.44), fres*0.32);
+  col = mix(col, vec3(0.84,0.66,0.74), fres*0.26 * smoothstep(0.05,0.35,1.0-V.y));
 
-  float spec = pow(max(dot(n,H),0.0), 110.0);
-  col += vec3(1.0,0.74,0.46) * spec * 1.35;
+  float spec = pow(max(dot(n,H),0.0), 120.0);
+  col += vec3(1.0,0.84,0.62) * spec * 0.14 * smoothstep(0.04,0.30,1.0-V.y);
 
-  // Pixel-crisp animated ocean wave glints / sparkles (inspired by retro 3D flight art).
-  vec2 wcell = floor(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
-  vec2 wfrac = fract(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
-  float wh = fract(sin(dot(wcell, vec2(127.1, 311.7))) * 43758.5453);
-  float twinkle = 0.5 + 0.5 * sin(t * 2.6 + wh * 42.0);
-  float glint = step(0.84, wh) * step(0.45, twinkle)
-              * step(0.28, wfrac.x) * step(wfrac.x, 0.72)
-              * step(0.38, wfrac.y) * step(wfrac.y, 0.62);
-  float distFade = 1.0 - smoothstep(420.0, 2200.0, length(vW - uCam));
-  col = mix(col, vec3(0.95, 0.90, 0.84), glint * 0.58 * distFade);
+  // Broad sun path: a wide warm shimmer instead of uniform sparkle noise.
+  vec3 flatV = normalize(vec3(uCam.x - vW.x, 0.0, uCam.z - vW.z));
+  float path = pow(max(dot(flatV, normalize(vec3(uSun.x, 0.0, uSun.z))), 0.0), 7.0);
+  col += vec3(1.0, 0.82, 0.60) * path * 0.06 * smoothstep(0.04,0.30,1.0-V.y);
 
   // Dual-band animated coastal surf foam.
-  float foamInner = 1.0 - smoothstep(0.3, 5.5, depth);
+  float foamInner = 1.0 - smoothstep(0.3, 4.5, depth);
   float foamWave = sin(depth * 1.15 - t * 2.4 + q.x * 1.5) * 0.5 + 0.5;
-  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.62, 0.90, foamWave);
+  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.64, 0.92, foamWave);
   float fnoise = 0.5+0.5*sin(q.x*4.0+q.y*3.0+t*1.3);
-  float foam = clamp(foamInner * (0.35 + fnoise * 0.58) + foamOuter * 0.42, 0.0, 0.92);
-  col = mix(col, vec3(0.92,0.95,0.90), foam);
+  float foam = clamp(foamInner * (0.22 + fnoise * 0.44) + foamOuter * 0.22, 0.0, 0.72);
+  col = mix(col, vec3(0.94,0.96,0.92), foam);
 
-  float fog = 1.0-exp(-length(vW-uCam)*0.00027);
+  float fog = 1.0-exp(-length(vW-uCam)*0.00024);
   col = mix(col, uFogColor, fog);
   outColor = vec4(col,1.0);
 }`;
@@ -143,24 +135,58 @@ in vec3 vW, vN, vC;
 out vec4 outColor;
 uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
 uniform float uFogDensity, uSpec, uContour;
+float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
+float vnoise(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=h21(i), b=h21(i+vec2(1,0)), c=h21(i+vec2(0,1)), d=h21(i+vec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
 void main(){
   vec3 N = normalize(vN), V = normalize(uCam-vW);
   float ndl = max(dot(N,uSun),0.0);
-  float wrap = max((dot(N,uSun)+0.25)/1.25, 0.0);
+  float wrap = max((dot(N,uSun)+0.30)/1.30, 0.0);
   vec3 base = vC;
-  if (uContour > 0.5 && vW.y > 4.0) {
-    // Stylized retro elevation contour lines on hills and ridges.
-    float band = fract(vW.y / 18.0);
-    float line = 1.0 - smoothstep(0.0, 0.10, band);
-    base *= 1.0 - line * 0.16;
+  float dCam = length(vW-uCam);
+  if (uContour > 0.5) {
+    // Painterly ground grain: breaks up flat vertex-colour fields at close range.
+    float nfade = 1.0 - smoothstep(650.0, 2300.0, dCam);
+    float m1 = vnoise(vW.xz*0.055) - 0.5;
+    float m2 = vnoise(vW.xz*0.015 + 3.7) - 0.5;
+    base *= 1.0 + (m1*0.15 + m2*0.22) * nfade;
+    base.g *= 1.0 + m2*0.06*nfade;
+    base.r *= 1.0 - m1*0.05*nfade;
+    // Patchwork fields, painted per pixel so the parcel edges stay crisp.
+    float landMask = smoothstep(7.0, 18.0, vW.y) * (1.0 - smoothstep(170.0, 300.0, vW.y));
+    float f1 = vnoise(vW.xz*0.0092 + 7.7);
+    float f2 = vnoise(vW.xz*0.0210 + 1.3);
+    vec3 tune = mix(vec3(1.14,1.05,0.80), vec3(1.06,0.72,0.54), smoothstep(0.40,0.48,f1));
+    tune = mix(tune, vec3(0.88,1.04,0.76), smoothstep(0.56,0.63,f2)*0.55);
+    tune = mix(tune, vec3(1.12,0.94,0.66), smoothstep(0.66,0.74,f2)*0.45);
+    base *= mix(vec3(1.0), tune, landMask * 0.85 * nfade);
+    // Dark woodland: clumped specks and broad copses give the near hills weight.
+    float wFade = 1.0 - smoothstep(1200.0, 2800.0, dCam);
+    float woodPatch = vnoise(vW.xz*0.0055 + 31.7);
+    float woodFleck = vnoise(vW.xz*0.070 + 12.9);
+    float wood = smoothstep(0.50,0.72,woodPatch) * smoothstep(0.34,0.62,woodFleck);
+    base = mix(base, base*vec3(0.62,0.73,0.54), wood*landMask*0.60*wFade);
+    base = mix(base, base*vec3(0.80,0.86,0.70), smoothstep(0.44,0.68,woodPatch)*landMask*0.28*wFade);
+    // Airbrushed elevation tint: warm lowlands, cooler violet ridges.
+    base *= mix(vec3(1.05,1.00,0.97), vec3(0.92,0.90,1.05), smoothstep(40.0,380.0,vW.y));
+    if (vW.y > 24.0) {
+      // Faint elevation bands, the way painted maps hint at relief.
+      float band = fract(vW.y / 26.0);
+      float line = 1.0 - smoothstep(0.0, 0.05, band);
+      base *= 1.0 - line * 0.06;
+    }
   }
-  vec3 col = base*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
+  vec3 col = base*(uAmbient + uSunColor*(0.74*ndl + 0.26*wrap));
   vec3 H = normalize(uSun+V);
-  col += uSunColor * pow(max(dot(N,H),0.0), 36.0) * uSpec;
+  col += uSunColor * pow(max(dot(N,H),0.0), 40.0) * uSpec;
   float rim = pow(1.0-max(dot(N,V),0.0), 3.0);
-  col += uSunColor * rim * 0.07;
-  float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
-  col = mix(col, uFogColor, fog);
+  col += uSunColor * rim * 0.10;
+  vec3 fogCol = mix(uFogColor, vec3(0.74,0.68,0.84), smoothstep(140.0, 480.0, vW.y) * 0.55);
+  float fog = 1.0-exp(-dCam*uFogDensity);
+  col = mix(col, fogCol, fog);
   outColor = vec4(col,1.0);
 }`;
 
@@ -194,25 +220,26 @@ float h21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fra
 void main(){
   vec3 n = normalize(vN);
   float ndl = max(dot(n,uSun),0.0);
-  vec3 col = vC*(uAmbient*1.05 + uSunColor*ndl*0.95);
+  vec3 col = vC*(uAmbient*1.36 + uSunColor*ndl*1.02);
 
   if (abs(n.y) < 0.5) {
     float u = (abs(n.x) > 0.5 ? vLocal.z*vSize.z : vLocal.x*vSize.x);
     float v = vLocal.y*vSize.y;
-    vec2 g = vec2(u/3.8, (v-1.5)/4.2);
+    vec2 g = vec2(u/7.0, (v-2.6)/7.4);
     vec2 cell = floor(g);
     vec2 f = fract(g);
-    float win = step(0.16,f.x)*step(f.x,0.80)*step(0.22,f.y)*step(f.y,0.80);
+    float win = step(0.22,f.x)*step(f.x,0.68)*step(0.26,f.y)*step(f.y,0.70);
     float rnd = h21(cell + vec2(vSeed*7.13, vSeed*3.77));
-    float on = step(0.40, rnd);
-    vec3 wc = vec3(1.0,0.72,0.36);
-    if (rnd < 0.055) wc = vec3(0.55,0.82,1.0);
-    col = mix(col, vec3(0.05,0.06,0.11), win*0.6);
-    col += wc * win * on * 1.45;
-    if (vLocal.y > 0.985) col = vC*0.5 + vec3(0.03,0.02,0.05);
-    if (vLocal.y < 0.02) col *= 0.55;
+    float on = step(0.80, rnd);
+    vec3 wc = vec3(1.0,0.78,0.46);
+    if (rnd > 0.998) wc = vec3(0.82,0.93,1.0);
+    float wfade = 1.0 - smoothstep(1400.0, 3200.0, length(vW-uCam));
+    col = mix(col, vec3(0.16,0.16,0.22), win*0.38);
+    col += wc * win * on * 0.40 * wfade;
+    if (vLocal.y > 0.985) col = vC*0.95 + vec3(0.12,0.11,0.13);
+    if (vLocal.y < 0.02) col *= 0.62;
   } else if (n.y > 0.5) {
-    col = vC*0.40 + vec3(0.02,0.015,0.04);
+    col = vC*0.55 + vec3(0.05,0.04,0.08);
   }
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
@@ -236,14 +263,19 @@ in vec2 vUV; in vec3 vW;
 out vec4 outColor;
 uniform sampler2D uTex;
 uniform vec3 uTint, uShade, uFogColor, uCam;
-uniform float uFogDensity;
+uniform float uFogDensity, uAlpha;
 void main(){
   vec4 t = texture(uTex, vUV);
   if (t.a < 0.5) discard;
-  vec3 col = mix(uShade, uTint, clamp(vUV.y*1.1-0.05, 0.0, 1.0));
+  vec3 col = mix(uShade, uTint, clamp((vUV.y-0.10)/0.90, 0.0, 1.0));
+  // Cauliflower form from the mask itself: lit crown, cool shaded underside.
+  float upA = texture(uTex, vUV + vec2(0.0, 0.07)).a;
+  float dnA = texture(uTex, vUV - vec2(0.0, 0.07)).a;
+  col = mix(col, uTint*1.05, (1.0-upA)*0.55);
+  col = mix(col, uShade*0.84, (1.0-dnA)*0.60);
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
-  outColor = vec4(col,1.0);
+  outColor = vec4(col, uAlpha);
 }`;
 
 const POINT_VS = `#version 300 es
@@ -260,7 +292,7 @@ void main(){
   float d = length(aPos-uCam);
   gl_PointSize = clamp(abs(aSize)*700.0/max(d,50.0), 1.0, 7.0);
   vCol = aColor;
-  vFade = 1.0 - smoothstep(700.0, 2800.0, d);
+  vFade = 1.0 - smoothstep(900.0, 3000.0, d);
   vBlink = aSize < 0.0 ? step(0.0, sin(uTime*5.0 + aPhase*6.283))
                        : 0.86 + 0.14*sin(uTime*2.2 + aPhase*19.0);
 }`;
@@ -377,20 +409,21 @@ float bayer4(vec2 a){ return bayer2(0.5*a)*0.25 + bayer2(a); }
 float bayer8(vec2 a){ return bayer4(0.5*a)*0.25 + bayer2(a); }
 void main(){
   vec3 c = texture(uScene, vUV).rgb;
-  // No unsharp pass: nearest-neighbour upscale and dithering carry the pixel look.
+  // Gentle grade: keep the pastel gamut, lift shadows a touch, no hard banding.
   float l = dot(c, vec3(0.299,0.587,0.114));
-  c = mix(vec3(l), c, 1.16);
-  c = pow(max(c,0.0), vec3(0.94,1.0,1.04));
-  c += (1.0-l)*vec3(0.022,0.0,0.055);
-  c *= vec3(1.05,1.0,0.97);
+  c = mix(vec3(l), c, 1.06);
+  c = pow(max(c,0.0), vec3(0.92,0.98,1.02));
+  c = c*1.03 + vec3(0.010,0.006,0.014);
+  c += (1.0-l)*vec3(0.020,0.0,0.045);
   vec2 d = vUV-0.5;
-  c *= 1.0 - 0.30*pow(length(d)*1.45, 2.2);
+  c *= 1.0 - 0.16*pow(length(d)*1.40, 2.4);
   // Damage flash: red edge burn that leaves the centre readable.
   float edge = smoothstep(0.16, 0.62, length(d));
   c = mix(c, vec3(0.62,0.05,0.07), uHurt * edge * 0.85);
   c = mix(c, vec3(0.9,0.2,0.2), uHurt * 0.10);
-  float bay = (bayer8(gl_FragCoord.xy) - 0.5) * 0.55;
-  c = floor(c*10.0 + 0.5 + bay)/10.0;
+  // Fine 4x4 ordered dither into 40 levels: a whisper of texture, not a screen door.
+  float bay = (bayer4(gl_FragCoord.xy) - 0.5) / 40.0;
+  c = floor(c*40.0 + 0.5 + bay)/40.0;
   outColor = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
 
@@ -417,6 +450,6 @@ const postProg = makeProg(FS_VS, POST_FS, 'post');
 const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
 const trailProg = makeProg(TRAIL_VS, TRAIL_FS, 'trail');
 const shadowProg = makeProg(SHADOW_VS, SHADOW_FS, 'shadow');
-const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
-const FOG_COL = [0.80, 0.52, 0.44];
-const FOG_DENS = 0.00026;
+const SUN_DIR = vnorm([0.40, 0.15, -0.90]);
+const FOG_COL = [0.96, 0.77, 0.70];
+const FOG_DENS = 0.00022;

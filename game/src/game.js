@@ -43,7 +43,7 @@ function updateTrails(dt) {
     const tr = wingTrails[s];
     for (let i = tr.length - 1; i >= 0; i--) {
       tr[i].age += dt;
-      if (tr[i].age > 1.35) tr.splice(i, 1);
+      if (tr[i].age > 2.2) tr.splice(i, 1);
     }
   }
   if (!plane.alive) return;
@@ -54,8 +54,8 @@ function updateTrails(dt) {
   const rx = camMat[0], ry = camMat[1], rz = camMat[2];
   const fx = -camMat[8], fy = -camMat[9], fz = -camMat[10];
   const gFactor = clamp(Math.abs(plane.inRoll) * 0.95 + Math.abs(plane.bankVel) * 0.25 + Math.abs(plane.inPitch) * 0.65 + (plane.barrelT > 0 ? 1.0 : 0) + plane.boost * 0.75, 0, 1.2);
-  const w = 0.08 + Math.min(1, gFactor) * 0.07;
-  const alpha = 0.42 + Math.min(1, gFactor) * 0.48;
+  const w = 0.045 + Math.min(1, gFactor) * 0.040;
+  const alpha = 0.50 + Math.min(1, gFactor) * 0.38;
   for (let s = 0; s < 2; s++) {
     const sign = s === 0 ? 1 : -1;
     const tr = wingTrails[s];
@@ -301,10 +301,11 @@ function updatePlane(dt) {
 }
 
 function updateTitlePlane() {
-  const a = game.time * 0.095, R = 780;
-  plane.pos[0] = -60 + Math.cos(a) * R;
-  plane.pos[2] = Math.sin(a) * R;
-  plane.pos[1] = 228 + Math.sin(game.time * 0.6) * 12;
+  // Attract orbit hugs the bay so the jet is always framed by water, coast and sun.
+  const a = 0.96 + game.time * 0.12, R = 70;
+  plane.pos[0] = -430 + Math.cos(a) * R;
+  plane.pos[2] = -300 + Math.sin(a) * R;
+  plane.pos[1] = 232 + Math.sin(game.time * 0.6) * 8;
   plane.yaw = Math.PI - a;
   plane.pitch = Math.cos(game.time * 0.6) * 0.06;
   plane.roll = 0.48; plane.rollPunch = 0; plane.inRoll = 0.42; plane.bankVel = 0;
@@ -324,10 +325,12 @@ function updateCamera(dt) {
   let posTau = CHASE_TAU.pos, lookTau = CHASE_TAU.look, upTau = CHASE_TAU.up;
 
   if (game.state === 'title') {
-    const a = game.time * 0.17;
-    eye = [plane.pos[0] + Math.cos(a) * 34, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 34];
-    look = vadd(plane.pos, [0, -14, 0]);
-    upv = [0, 1, 0]; fov = 56;
+    // Hero chase: jet just below centre and large in frame, sun and coastline ahead.
+    const fx = -Math.sin(plane.yaw), fz = -Math.cos(plane.yaw);
+    const rx = Math.cos(plane.yaw), rz = -Math.sin(plane.yaw);
+    eye = [plane.pos[0] - fx * 28 - rx * 6, plane.pos[1] + 3.2, plane.pos[2] - fz * 28 - rz * 6];
+    look = [plane.pos[0] + fx * 46, plane.pos[1] + 0.5, plane.pos[2] + fz * 46];
+    upv = [0, 1, 0]; fov = 60;
     snap = true;
   } else if (game.state === 'results' || game.state === 'upgrade') {
     game.camAngle += dt * 0.22;
@@ -349,11 +352,11 @@ function updateCamera(dt) {
   } else if (game.camMode === 2) {
     // Overhead tactical view (stays smoothly centered over crash site too).
     const hFwd = vnorm([-Math.sin(plane.yaw), 0, -Math.cos(plane.yaw)]);
-    const alt = 104 + plane.boost * 18;
-    eye = [plane.pos[0] - hFwd[0] * 24, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 24];
-    look = [plane.pos[0] + hFwd[0] * 32, plane.pos[1] - 6, plane.pos[2] + hFwd[2] * 32];
+    const alt = 74 + plane.boost * 14;
+    eye = [plane.pos[0] - hFwd[0] * 18, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 18];
+    look = [plane.pos[0] + hFwd[0] * 26, plane.pos[1] - 4, plane.pos[2] + hFwd[2] * 26];
     upv = hFwd;
-    fov = 52 + plane.boost * 5;
+    fov = 48 + plane.boost * 5;
     posTau = 0.13; lookTau = 0.09; upTau = 0.13;
     if (game.state === 'play' && plane.alive) {
       eye = vadd(eye, vmul(plane.vel, posTau));
@@ -372,9 +375,9 @@ function updateCamera(dt) {
     cam.sway = lerp(cam.sway, targetSway, 1 - Math.exp(-dt * 8.5));
     const barrelKick = plane.barrelT > 0 ? Math.sin(plane.barrel) * 0.07 : 0;
     const blend = vnorm(vadd(vlerp([0, 1, 0], up, 0.28), vmul(right, barrelKick)));
-    const dist = 16.8 + plane.speed * 0.012 + plane.boost * 2.4;
-    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 5.2), vmul(right, cam.sway)));
-    look = vadd(plane.pos, vadd(vmul(fwd, 74), vadd(vmul(up, 2.1), vmul(right, cam.sway * 0.35))));
+    const dist = 18.0 + plane.speed * 0.010 + plane.boost * 2.2;
+    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 4.4), vmul(right, cam.sway)));
+    look = vadd(plane.pos, vadd(vmul(fwd, 82), vadd(vmul(up, -4.2), vmul(right, cam.sway * 0.35))));
     upv = blend; fov = 62 + plane.boost * 12 + Math.abs(plane.inRoll) * 3.2;
     if (game.state === 'play' && plane.alive) {
       const vel = plane.vel;

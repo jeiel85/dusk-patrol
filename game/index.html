@@ -230,52 +230,88 @@ function coastX(z) {
 }
 function cityMask(x, z) {
   const d = x - coastX(z);
-  const mx = smoothstep(70, 150, d) * (1 - smoothstep(650, 790, d));
-  const mz = 1 - smoothstep(700, 870, Math.abs(z - 40));
+  // Broad shoulders: the shelf has to fade into the hills without a terraced cliff.
+  const mx = smoothstep(60, 160, d) * (1 - smoothstep(430, 720, d));
+  const mz = 1 - smoothstep(380, 700, Math.abs(z + 520));
   return Math.min(mx, mz);
 }
 function terrainHeight(x, z) {
   const shore = coastX(z);
   const d = x - shore;
-  if (d < -140) return -9 - Math.min(42, (-d - 140) * 0.018);
   let h;
-  if (d < 0) {
+  if (d < -140) h = -9 - Math.min(42, (-d - 140) * 0.018);
+  else if (d < 0) {
     h = -9 * (1 - (d + 140) / 140);
   } else {
-    h = smoothstep(0, 170, d) * 17;
-    const inland = smoothstep(220, 1900, d);
-    h += (fbm(x * 0.00125 + 9.1, z * 0.00125 - 3.4, 4) - 0.5) * 30 * inland;
-    h += Math.max(0, fbm(x * 0.00072 + 2.2, z * 0.00072 + 8.5, 4) - 0.44) * 170 * inland;
+    h = smoothstep(0, 140, d) * 15;
+    const inland = smoothstep(90, 950, d);
+    h += (fbm(x * 0.00125 + 9.1, z * 0.00125 - 3.4, 4) - 0.5) * 52 * inland;
+    h += Math.max(0, fbm(x * 0.00072 + 2.2, z * 0.00072 + 8.5, 4) - 0.40) * 240 * inland;
   }
-  const north = smoothstep(-1000, -2700, z);
-  const east = smoothstep(1100, 2700, d);
+  // Western headland across the bay: frames the seaward horizon.
+  const ix = coastX(-500) - 1650, iz = -500;
+  const iq = Math.hypot((x - ix) / 880, (z - iz) / 820);
+  if (iq < 1) {
+    const isl = Math.pow(1 - iq, 1.5) * 280 - 14;
+    const rough = (fbm(x * 0.0042 + 6.1, z * 0.0042 - 9.3, 3) - 0.5) * 70 * (1 - iq);
+    h = Math.max(h, isl + rough);
+  }
+  const north = smoothstep(-700, -2400, z);
+  const east = smoothstep(900, 2400, d);
   const mm = Math.max(north * 0.95, east * 0.8) * smoothstep(60, 520, d);
-  if (mm > 0.001) h += mm * (70 + ridged(x * 0.00068 + 4.4, z * 0.00068 - 2.1) * 430);
+  if (mm > 0.001) h += mm * (80 + ridged(x * 0.00068 + 4.4, z * 0.00068 - 2.1) * 520);
+  // Sentinel headland: one broad peak anchors the northern coast on the horizon.
+  const px = coastX(-700) + 1250, pz = -700;
+  const pd = Math.hypot((x - px) * 0.75, z - pz) / 1050;
+  if (pd < 1) h += Math.pow(1 - pd, 1.7) * 520;
   const city = cityMask(x, z);
   return h * (1 - city) + 11 * city;
 }
 
 const PAL = {
-  wet: rgb('#ab8660'), sand: rgb('#d8b184'), grass: rgb('#6d7847'), grass2: rgb('#92713e'),
-  rock: rgb('#5b4c60'), rock2: rgb('#3d3349'), snow: rgb('#d5c9de'), asphalt: rgb('#363542'),
-  seaDeep: rgb('#0a4a60'), seaShallow: rgb('#4fc6ba'), seaWarm: rgb('#e7a184'),
-  fog: rgb('#d19173'), sun: [1.0, 0.78, 0.5], skyAmb: [0.42, 0.4, 0.62]
+  wet: rgb('#cbb083'), sand: rgb('#efd9ab'), sand2: rgb('#e4c797'),
+  pale: rgb('#d8cf87'), olive: rgb('#98a344'), green: rgb('#6d8340'), ochre: rgb('#dca048'),
+  amber: rgb('#c47a38'), rust: rgb('#bb5335'), red: rgb('#9c3338'),
+  forest: rgb('#4f6334'),
+  plum: rgb('#74475f'), rock: rgb('#8a6878'), rock2: rgb('#5f4a68'),
+  snow: rgb('#f1e4e7'), asphalt: rgb('#5d566c'),
+  seaDeep: rgb('#0f6f9c'), seaShallow: rgb('#7fe0d4'), seaWarm: rgb('#f0b894'),
+  fog: rgb('#e0a87f'), sun: [1.0, 0.80, 0.55], skyAmb: [0.60, 0.55, 0.74]
 };
-const CITY_WALLS = [rgb('#394059'), rgb('#454b68'), rgb('#2d3349'), rgb('#4b4664'), rgb('#3f3a52')];
+const CITY_WALLS = [rgb('#9a9099'), rgb('#a79a92'), rgb('#8d8892'), rgb('#b1a297'), rgb('#968d90')];
+
+const mixRGB = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 
 function terrainColor(x, z, h, slope) {
-  const n = fbm(x * 0.012, z * 0.012, 2);
+  const fine = fbm(x * 0.011, z * 0.011, 2);
+  const patch = fbm(x * 0.0040 + 4.2, z * 0.0040 - 8.1, 3);
+  const patch2 = fbm(x * 0.0019 - 12.0, z * 0.0019 + 3.4, 3);
+  const patch3 = fbm(x * 0.0085 - 3.3, z * 0.0085 + 11.7, 2);
+  // Sand only hugs the actual shore; inland low ground stays field-coloured
+  // so the city shelf does not read as a beach running through the hills.
+  const shore = coastX(z);
+  const beach = 1 - smoothstep(50, 200, x - shore);
   let c;
-  if (h < 1.2) c = PAL.wet;
-  else if (h < 6.5) c = PAL.sand;
-  else if (h < 70 + n * 28) c = n > 0.56 ? PAL.grass2 : PAL.grass;
-  else if (h < 190 + n * 40) c = PAL.rock;
-  else if (h < 330) c = PAL.rock2;
-  else c = PAL.snow;
-  if (slope > 0.62 && h > 8) c = PAL.rock;
-  if (h > 270 && slope < 0.38) c = PAL.snow;
-  if (cityMask(x, z) > 0.5 && h < 16) c = PAL.asphalt;
-  const v = 0.9 + n * 0.18;
+  if (h < 1.4) c = mixRGB(PAL.wet, PAL.olive, (1 - beach) * 0.8);
+  else if (h < 6.5) c = mixRGB(mixRGB(PAL.sand, PAL.sand2, fine), mixRGB(PAL.pale, PAL.olive, patch), 1 - beach);
+  else {
+    // Warm autumn patchwork: pale grass, olive, ochre and rust fields.
+    c = mixRGB(PAL.pale, PAL.olive, smoothstep(0.28, 0.52, patch));
+    c = mixRGB(c, PAL.green, (1 - smoothstep(0.40, 0.58, patch3)) * 0.35);
+    c = mixRGB(c, PAL.forest, smoothstep(30, 110, h) * (1 - smoothstep(0.42, 0.58, patch3)) * 0.42);
+    c = mixRGB(c, PAL.ochre, smoothstep(0.36, 0.60, patch2) * 0.92);
+    c = mixRGB(c, PAL.rust, smoothstep(0.48, 0.68, patch2) * 0.90);
+    c = mixRGB(c, PAL.red, smoothstep(0.58, 0.80, patch * 0.5 + patch2 * 0.62) * 0.62);
+    c = mixRGB(c, PAL.rust, smoothstep(0.56, 0.80, patch3) * 0.50);
+    // Ridges cool into plum and violet rock, with snow on the highest shoulders.
+    c = mixRGB(c, PAL.plum, smoothstep(90, 250, h) * 0.55);
+    c = mixRGB(c, PAL.rock, smoothstep(190, 340, h));
+    c = mixRGB(c, PAL.rock2, smoothstep(300, 470, h) * 0.8);
+    if (h > 260) c = mixRGB(c, PAL.snow, smoothstep(290, 470, h) * (1 - clamp(slope, 0, 1) * 0.45));
+  }
+  if (slope > 0.62 && h > 16 && h < 300) c = mixRGB(c, PAL.rock2, smoothstep(0.62, 0.92, slope) * 0.7);
+  if (cityMask(x, z) > 0.5 && h < 16) c = mixRGB(c, PAL.asphalt, 0.35);
+  const v = 0.90 + fine * 0.20;
   return [c[0] * v, c[1] * v, c[2] * v];
 }
 
@@ -283,14 +319,14 @@ function terrainColor(x, z, h, slope) {
 const buildings = [];
 (function generateCity() {
   const r = mulberry32(44117);
-  for (let z = -760; z <= 830; z += 30) {
+  for (let z = -860; z <= -260; z += 36) {
     const shore = coastX(z);
-    for (let d = 120; d <= 690; d += 28) {
-      if (r() < 0.17) continue;
-      const w = 12 + r() * 14;
-      const dp = 10 + r() * 12;
-      let hgt = 9 + Math.pow(r(), 2.1) * 52;
-      if (r() < 0.055) hgt += 60 + r() * 80;
+    for (let d = 150; d <= 410; d += 34) {
+      if (r() < 0.46) continue;
+      const w = 15 + r() * 13;
+      const dp = 12 + r() * 11;
+      let hgt = 5 + Math.pow(r(), 2.4) * 14;
+      if (r() < 0.02) hgt += 10 + r() * 20;
       buildings.push({
         x: shore + d + (r() - 0.5) * 9,
         z: z + (r() - 0.5) * 6,
@@ -305,10 +341,10 @@ const buildings = [];
 const streetLights = [];
 (function generateLights() {
   const r = mulberry32(991);
-  for (let z = -740; z <= 820; z += 34) {
+  for (let z = -880; z <= -220; z += 40) {
     const shore = coastX(z);
-    for (let d = 130; d <= 690; d += 46) {
-      if (r() < 0.28) continue;
+    for (let d = 160; d <= 420; d += 56) {
+      if (r() < 0.42) continue;
       streetLights.push([shore + d + 13 + r() * 4, 15.5, z + 13 + r() * 4]);
     }
   }
@@ -318,20 +354,56 @@ const streetLights = [];
 const cloudDefs = [];
 (function generateClouds() {
   const r = mulberry32(31007);
-  for (let i = 0; i < 56; i++) {
+  // High fair-weather cumulus. Cards stay small: a cumulus is a cluster of
+  // puffs, and oversized billboards read as pale walls whenever the camera nears.
+  for (let i = 0; i < 34; i++) {
     cloudDefs.push({
-      x: (r() * 2 - 1) * 2800, y: 280 + r() * 430, z: (r() * 2 - 1) * 2800,
-      sx: 130 + r() * 270, sy: 55 + r() * 105, tex: (r() * 4) | 0, drift: r() * TAU
+      x: (r() * 2 - 1) * 3000, y: 430 + r() * 340, z: (r() * 2 - 1) * 3000,
+      sx: 90 + r() * 170, sy: 55 + r() * 75, tex: (r() * 4) | 0, drift: r() * TAU
     });
   }
+  // Small mid puffs floating over the headlands, bottoms above the ridgelines.
   for (let i = 0; i < 16; i++) {
-    const z = (r() * 2 - 1) * 2200;
+    const z = (r() * 2 - 1) * 2800;
     cloudDefs.push({
-      x: coastX(z) - 900 + r() * 1800, y: 95 + r() * 90, z,
-      sx: 90 + r() * 160, sy: 35 + r() * 50, tex: (r() * 4) | 0, drift: r() * TAU
+      x: coastX(z) - 1000 + r() * 2200, y: 330 + r() * 120, z,
+      sx: 60 + r() * 90, sy: 40 + r() * 45, tex: (r() * 4) | 0, drift: r() * TAU
     });
   }
-  for (const c of cloudDefs) c.tintY = 0.80 + Math.sin(c.drift) * 0.04;
+  // A far bank behind the northern mountains, like a weather front on the horizon.
+  for (let i = 0; i < 8; i++) {
+    const z = -2300 - r() * 600;
+    cloudDefs.push({
+      x: -1600 + r() * 3200, y: 360 + r() * 90, z,
+      sx: 160 + r() * 160, sy: 90 + r() * 70, tex: (r() * 4) | 0, drift: r() * TAU
+    });
+  }
+  for (const c of cloudDefs) c.tintY = 0.86 + Math.sin(c.drift) * 0.04;
+})();
+
+/* Scrub and tree specks: the cheapest, strongest scale cue on the headlands. */
+const treePoints = [];
+(function generateTrees() {
+  const r = mulberry32(77003);
+  let guard = 0;
+  while (treePoints.length < 6000 && guard++ < 180000) {
+    const x = (r() * 2 - 1) * 2900;
+    const z = (r() * 2 - 1) * 2900;
+    const h = terrainHeight(x, z);
+    if (h < 12 || h > 300) continue;
+    if (cityMask(x, z) > 0.2) continue;
+    const grove = fbm(x * 0.0062 + 5.5, z * 0.0062 - 2.7, 3);
+    if (r() > grove * grove * 3.4) continue;
+    // Two or three specks per clump reads as woodland instead of scattered pepper.
+    treePoints.push([x, h + 2.4, z, r()]);
+    const extra = 1 + ((r() * 2) | 0);
+    for (let k = 0; k < extra && treePoints.length < 6000; k++) {
+      const tx = x + (r() - 0.5) * 11, tz = z + (r() - 0.5) * 11;
+      const th = terrainHeight(tx, tz);
+      if (th < 10 || th > 300) continue;
+      treePoints.push([tx, th + 2.2, tz, r()]);
+    }
+  }
 })();
 
 function droneHome(i) {
@@ -488,34 +560,31 @@ void main(){
   vec3 dir = normalize(uFwd + uRight*p.x*uTanFov*uAspect + uUp*p.y*uTanFov);
   float y = dir.y;
   float t = clamp(y, 0.0, 1.0);
-  vec3 zenith = vec3(0.135,0.10,0.27);
-  vec3 mid    = vec3(0.46,0.26,0.44);
-  vec3 horizon= vec3(0.97,0.62,0.42);
-  vec3 col = mix(horizon, mid, smoothstep(0.0,0.30,t));
-  col = mix(col, zenith, smoothstep(0.24,0.90,t));
-  col = mix(col, vec3(0.83,0.50,0.42), exp(-max(y,0.0)*16.0)*0.55);
+  // Pastel dusk: lilac zenith -> dusty rose -> warm cream horizon.
+  vec3 zenith = vec3(0.42,0.36,0.58);
+  vec3 mid    = vec3(0.80,0.62,0.71);
+  vec3 horizon= vec3(1.00,0.86,0.70);
+  vec3 col = mix(horizon, mid, smoothstep(0.0,0.34,t));
+  col = mix(col, zenith, smoothstep(0.28,0.98,t));
+  col = mix(col, vec3(1.00,0.79,0.62), exp(-max(y,0.0)*13.0)*0.30);
 
   float sd = max(dot(dir,uSun),0.0);
-  vec3 sunCol = vec3(1.0,0.80,0.52);
-  col += sunCol * pow(sd, 42.0) * 0.22;
-  col += sunCol * pow(sd, 220.0) * 0.85;
-  float disc = smoothstep(0.99945, 0.99978, sd);
-  col = mix(col, vec3(1.0,0.95,0.80), disc);
+  vec3 sunCol = vec3(1.0,0.88,0.62);
+  col += sunCol * pow(sd, 16.0) * 0.09;
+  col += sunCol * pow(sd, 140.0) * 0.22;
+  float disc = smoothstep(0.99870, 0.99920, sd);
+  vec3 discCol = vec3(1.0,0.95,0.74);
+  col = mix(col, discCol, disc);
+  col = mix(col, vec3(1.0,0.99,0.92), disc * smoothstep(0.9993,0.9998,sd));
 
-  vec3 sr = normalize(cross(vec3(0.0,1.0,0.0), uSun));
-  vec3 su = cross(uSun, sr);
-  float ang = atan(dot(dir,su), dot(dir,sr));
-  float ray = 0.5+0.5*sin(ang*27.0);
-  ray = pow(ray,4.0) * pow(sd,3.0) * smoothstep(0.0,0.16,y);
-  col += vec3(1.0,0.50,0.28) * ray * 0.20;
+  // Thin horizontal cloud streaks, softly dithered at the edges.
+  vec2 cuv = dir.xz / max(dir.y+0.08, 0.02);
+  float cl = noise(cuv*vec2(0.40,2.3) + vec2(uTime*0.003,0.0));
+  float band = smoothstep(0.56,0.76,cl) * smoothstep(0.02,0.10,y) * (1.0-smoothstep(0.30,0.60,y));
+  vec3 cloudCol = mix(vec3(0.94,0.72,0.76), vec3(1.0,0.88,0.76), pow(sd,2.0));
+  col = mix(col, cloudCol, band*0.38);
 
-  vec2 cuv = dir.xz / max(dir.y+0.09, 0.02);
-  float cl = noise(cuv*vec2(0.55,2.2) + vec2(uTime*0.004,0.0));
-  float band = smoothstep(0.55,0.74,cl) * smoothstep(0.015,0.16,y) * (1.0-smoothstep(0.48,0.82,y));
-  vec3 cloudCol = mix(vec3(0.98,0.58,0.55), vec3(1.0,0.84,0.66), pow(sd,2.0));
-  col = mix(col, cloudCol, band*0.5);
-
-  col = mix(vec3(0.08,0.09,0.15), col, smoothstep(-0.16, 0.0, y));
+  col = mix(vec3(0.19,0.15,0.26), col, smoothstep(-0.10, 0.0, y));
   outColor = vec4(col, 1.0);
 }`;
 
@@ -541,44 +610,39 @@ void main(){
   float h = (texture(uHeight, clamp(uv,0.001,0.999)).r*720.0-60.0);
   float depth = inside > 0.5 ? max(-h, 0.0) : 60.0;
 
-  vec3 deep = vec3(0.010,0.105,0.20);
-  vec3 shallow = vec3(0.14,0.50,0.52);
-  vec3 col = mix(shallow, deep, smoothstep(3.0,80.0,depth));
-  col = mix(col, vec3(0.07,0.30,0.39), smoothstep(70.0,240.0,depth)*0.35);
+  vec3 deep = vec3(0.05,0.21,0.42);
+  vec3 shallow = vec3(0.25,0.60,0.66);
+  vec3 col = mix(shallow, deep, smoothstep(1.0, 35.0, depth));
+  col = mix(col, vec3(0.15,0.31,0.50), smoothstep(30.0, 120.0, depth)*0.60);
 
-  vec2 q = vW.xz*0.055;
+  // Low swells only: high-frequency ripples alias into hard rays at this resolution.
+  vec2 q = vW.xz*0.020;
   float t = uTime;
-  float e = sin(q.x*1.6 + t*1.2)*0.045 + sin(q.y*2.1 - t*0.9)*0.035 + sin((q.x+q.y)*0.8 + t*0.6)*0.05;
+  float e = sin(q.x*5.0 + t*1.1)*0.004 + sin(q.y*6.3 - t*0.8)*0.0035 + sin((q.x+q.y)*3.4 + t*0.6)*0.003;
   vec3 n = normalize(vec3(e, 1.0, e*0.65));
   vec3 V = normalize(uCam - vW);
   vec3 H = normalize(uSun + V);
 
   float fres = pow(1.0-max(dot(n,V),0.0), 3.0);
-  col = mix(col, vec3(0.78,0.50,0.44), fres*0.32);
+  col = mix(col, vec3(0.84,0.66,0.74), fres*0.26 * smoothstep(0.05,0.35,1.0-V.y));
 
-  float spec = pow(max(dot(n,H),0.0), 110.0);
-  col += vec3(1.0,0.74,0.46) * spec * 1.35;
+  float spec = pow(max(dot(n,H),0.0), 120.0);
+  col += vec3(1.0,0.84,0.62) * spec * 0.14 * smoothstep(0.04,0.30,1.0-V.y);
 
-  // Pixel-crisp animated ocean wave glints / sparkles (inspired by retro 3D flight art).
-  vec2 wcell = floor(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
-  vec2 wfrac = fract(vW.xz * 0.115 + vec2(t * 0.18, -t * 0.08));
-  float wh = fract(sin(dot(wcell, vec2(127.1, 311.7))) * 43758.5453);
-  float twinkle = 0.5 + 0.5 * sin(t * 2.6 + wh * 42.0);
-  float glint = step(0.84, wh) * step(0.45, twinkle)
-              * step(0.28, wfrac.x) * step(wfrac.x, 0.72)
-              * step(0.38, wfrac.y) * step(wfrac.y, 0.62);
-  float distFade = 1.0 - smoothstep(420.0, 2200.0, length(vW - uCam));
-  col = mix(col, vec3(0.95, 0.90, 0.84), glint * 0.58 * distFade);
+  // Broad sun path: a wide warm shimmer instead of uniform sparkle noise.
+  vec3 flatV = normalize(vec3(uCam.x - vW.x, 0.0, uCam.z - vW.z));
+  float path = pow(max(dot(flatV, normalize(vec3(uSun.x, 0.0, uSun.z))), 0.0), 7.0);
+  col += vec3(1.0, 0.82, 0.60) * path * 0.06 * smoothstep(0.04,0.30,1.0-V.y);
 
   // Dual-band animated coastal surf foam.
-  float foamInner = 1.0 - smoothstep(0.3, 5.5, depth);
+  float foamInner = 1.0 - smoothstep(0.3, 4.5, depth);
   float foamWave = sin(depth * 1.15 - t * 2.4 + q.x * 1.5) * 0.5 + 0.5;
-  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.62, 0.90, foamWave);
+  float foamOuter = (1.0 - smoothstep(2.0, 14.0, depth)) * smoothstep(0.64, 0.92, foamWave);
   float fnoise = 0.5+0.5*sin(q.x*4.0+q.y*3.0+t*1.3);
-  float foam = clamp(foamInner * (0.35 + fnoise * 0.58) + foamOuter * 0.42, 0.0, 0.92);
-  col = mix(col, vec3(0.92,0.95,0.90), foam);
+  float foam = clamp(foamInner * (0.22 + fnoise * 0.44) + foamOuter * 0.22, 0.0, 0.72);
+  col = mix(col, vec3(0.94,0.96,0.92), foam);
 
-  float fog = 1.0-exp(-length(vW-uCam)*0.00027);
+  float fog = 1.0-exp(-length(vW-uCam)*0.00024);
   col = mix(col, uFogColor, fog);
   outColor = vec4(col,1.0);
 }`;
@@ -603,24 +667,58 @@ in vec3 vW, vN, vC;
 out vec4 outColor;
 uniform vec3 uSun, uSunColor, uAmbient, uFogColor, uCam;
 uniform float uFogDensity, uSpec, uContour;
+float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
+float vnoise(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  float a=h21(i), b=h21(i+vec2(1,0)), c=h21(i+vec2(0,1)), d=h21(i+vec2(1,1));
+  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+}
 void main(){
   vec3 N = normalize(vN), V = normalize(uCam-vW);
   float ndl = max(dot(N,uSun),0.0);
-  float wrap = max((dot(N,uSun)+0.25)/1.25, 0.0);
+  float wrap = max((dot(N,uSun)+0.30)/1.30, 0.0);
   vec3 base = vC;
-  if (uContour > 0.5 && vW.y > 4.0) {
-    // Stylized retro elevation contour lines on hills and ridges.
-    float band = fract(vW.y / 18.0);
-    float line = 1.0 - smoothstep(0.0, 0.10, band);
-    base *= 1.0 - line * 0.16;
+  float dCam = length(vW-uCam);
+  if (uContour > 0.5) {
+    // Painterly ground grain: breaks up flat vertex-colour fields at close range.
+    float nfade = 1.0 - smoothstep(650.0, 2300.0, dCam);
+    float m1 = vnoise(vW.xz*0.055) - 0.5;
+    float m2 = vnoise(vW.xz*0.015 + 3.7) - 0.5;
+    base *= 1.0 + (m1*0.15 + m2*0.22) * nfade;
+    base.g *= 1.0 + m2*0.06*nfade;
+    base.r *= 1.0 - m1*0.05*nfade;
+    // Patchwork fields, painted per pixel so the parcel edges stay crisp.
+    float landMask = smoothstep(7.0, 18.0, vW.y) * (1.0 - smoothstep(170.0, 300.0, vW.y));
+    float f1 = vnoise(vW.xz*0.0092 + 7.7);
+    float f2 = vnoise(vW.xz*0.0210 + 1.3);
+    vec3 tune = mix(vec3(1.14,1.05,0.80), vec3(1.06,0.72,0.54), smoothstep(0.40,0.48,f1));
+    tune = mix(tune, vec3(0.88,1.04,0.76), smoothstep(0.56,0.63,f2)*0.55);
+    tune = mix(tune, vec3(1.12,0.94,0.66), smoothstep(0.66,0.74,f2)*0.45);
+    base *= mix(vec3(1.0), tune, landMask * 0.85 * nfade);
+    // Dark woodland: clumped specks and broad copses give the near hills weight.
+    float wFade = 1.0 - smoothstep(1200.0, 2800.0, dCam);
+    float woodPatch = vnoise(vW.xz*0.0055 + 31.7);
+    float woodFleck = vnoise(vW.xz*0.070 + 12.9);
+    float wood = smoothstep(0.50,0.72,woodPatch) * smoothstep(0.34,0.62,woodFleck);
+    base = mix(base, base*vec3(0.62,0.73,0.54), wood*landMask*0.60*wFade);
+    base = mix(base, base*vec3(0.80,0.86,0.70), smoothstep(0.44,0.68,woodPatch)*landMask*0.28*wFade);
+    // Airbrushed elevation tint: warm lowlands, cooler violet ridges.
+    base *= mix(vec3(1.05,1.00,0.97), vec3(0.92,0.90,1.05), smoothstep(40.0,380.0,vW.y));
+    if (vW.y > 24.0) {
+      // Faint elevation bands, the way painted maps hint at relief.
+      float band = fract(vW.y / 26.0);
+      float line = 1.0 - smoothstep(0.0, 0.05, band);
+      base *= 1.0 - line * 0.06;
+    }
   }
-  vec3 col = base*(uAmbient + uSunColor*(0.55*ndl + 0.45*wrap));
+  vec3 col = base*(uAmbient + uSunColor*(0.74*ndl + 0.26*wrap));
   vec3 H = normalize(uSun+V);
-  col += uSunColor * pow(max(dot(N,H),0.0), 36.0) * uSpec;
+  col += uSunColor * pow(max(dot(N,H),0.0), 40.0) * uSpec;
   float rim = pow(1.0-max(dot(N,V),0.0), 3.0);
-  col += uSunColor * rim * 0.07;
-  float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
-  col = mix(col, uFogColor, fog);
+  col += uSunColor * rim * 0.10;
+  vec3 fogCol = mix(uFogColor, vec3(0.74,0.68,0.84), smoothstep(140.0, 480.0, vW.y) * 0.55);
+  float fog = 1.0-exp(-dCam*uFogDensity);
+  col = mix(col, fogCol, fog);
   outColor = vec4(col,1.0);
 }`;
 
@@ -654,25 +752,26 @@ float h21(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fra
 void main(){
   vec3 n = normalize(vN);
   float ndl = max(dot(n,uSun),0.0);
-  vec3 col = vC*(uAmbient*1.05 + uSunColor*ndl*0.95);
+  vec3 col = vC*(uAmbient*1.36 + uSunColor*ndl*1.02);
 
   if (abs(n.y) < 0.5) {
     float u = (abs(n.x) > 0.5 ? vLocal.z*vSize.z : vLocal.x*vSize.x);
     float v = vLocal.y*vSize.y;
-    vec2 g = vec2(u/3.8, (v-1.5)/4.2);
+    vec2 g = vec2(u/7.0, (v-2.6)/7.4);
     vec2 cell = floor(g);
     vec2 f = fract(g);
-    float win = step(0.16,f.x)*step(f.x,0.80)*step(0.22,f.y)*step(f.y,0.80);
+    float win = step(0.22,f.x)*step(f.x,0.68)*step(0.26,f.y)*step(f.y,0.70);
     float rnd = h21(cell + vec2(vSeed*7.13, vSeed*3.77));
-    float on = step(0.40, rnd);
-    vec3 wc = vec3(1.0,0.72,0.36);
-    if (rnd < 0.055) wc = vec3(0.55,0.82,1.0);
-    col = mix(col, vec3(0.05,0.06,0.11), win*0.6);
-    col += wc * win * on * 1.45;
-    if (vLocal.y > 0.985) col = vC*0.5 + vec3(0.03,0.02,0.05);
-    if (vLocal.y < 0.02) col *= 0.55;
+    float on = step(0.80, rnd);
+    vec3 wc = vec3(1.0,0.78,0.46);
+    if (rnd > 0.998) wc = vec3(0.82,0.93,1.0);
+    float wfade = 1.0 - smoothstep(1400.0, 3200.0, length(vW-uCam));
+    col = mix(col, vec3(0.16,0.16,0.22), win*0.38);
+    col += wc * win * on * 0.40 * wfade;
+    if (vLocal.y > 0.985) col = vC*0.95 + vec3(0.12,0.11,0.13);
+    if (vLocal.y < 0.02) col *= 0.62;
   } else if (n.y > 0.5) {
-    col = vC*0.40 + vec3(0.02,0.015,0.04);
+    col = vC*0.55 + vec3(0.05,0.04,0.08);
   }
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
@@ -696,14 +795,19 @@ in vec2 vUV; in vec3 vW;
 out vec4 outColor;
 uniform sampler2D uTex;
 uniform vec3 uTint, uShade, uFogColor, uCam;
-uniform float uFogDensity;
+uniform float uFogDensity, uAlpha;
 void main(){
   vec4 t = texture(uTex, vUV);
   if (t.a < 0.5) discard;
-  vec3 col = mix(uShade, uTint, clamp(vUV.y*1.1-0.05, 0.0, 1.0));
+  vec3 col = mix(uShade, uTint, clamp((vUV.y-0.10)/0.90, 0.0, 1.0));
+  // Cauliflower form from the mask itself: lit crown, cool shaded underside.
+  float upA = texture(uTex, vUV + vec2(0.0, 0.07)).a;
+  float dnA = texture(uTex, vUV - vec2(0.0, 0.07)).a;
+  col = mix(col, uTint*1.05, (1.0-upA)*0.55);
+  col = mix(col, uShade*0.84, (1.0-dnA)*0.60);
   float fog = 1.0-exp(-length(vW-uCam)*uFogDensity);
   col = mix(col, uFogColor, fog);
-  outColor = vec4(col,1.0);
+  outColor = vec4(col, uAlpha);
 }`;
 
 const POINT_VS = `#version 300 es
@@ -720,7 +824,7 @@ void main(){
   float d = length(aPos-uCam);
   gl_PointSize = clamp(abs(aSize)*700.0/max(d,50.0), 1.0, 7.0);
   vCol = aColor;
-  vFade = 1.0 - smoothstep(700.0, 2800.0, d);
+  vFade = 1.0 - smoothstep(900.0, 3000.0, d);
   vBlink = aSize < 0.0 ? step(0.0, sin(uTime*5.0 + aPhase*6.283))
                        : 0.86 + 0.14*sin(uTime*2.2 + aPhase*19.0);
 }`;
@@ -837,20 +941,21 @@ float bayer4(vec2 a){ return bayer2(0.5*a)*0.25 + bayer2(a); }
 float bayer8(vec2 a){ return bayer4(0.5*a)*0.25 + bayer2(a); }
 void main(){
   vec3 c = texture(uScene, vUV).rgb;
-  // No unsharp pass: nearest-neighbour upscale and dithering carry the pixel look.
+  // Gentle grade: keep the pastel gamut, lift shadows a touch, no hard banding.
   float l = dot(c, vec3(0.299,0.587,0.114));
-  c = mix(vec3(l), c, 1.16);
-  c = pow(max(c,0.0), vec3(0.94,1.0,1.04));
-  c += (1.0-l)*vec3(0.022,0.0,0.055);
-  c *= vec3(1.05,1.0,0.97);
+  c = mix(vec3(l), c, 1.06);
+  c = pow(max(c,0.0), vec3(0.92,0.98,1.02));
+  c = c*1.03 + vec3(0.010,0.006,0.014);
+  c += (1.0-l)*vec3(0.020,0.0,0.045);
   vec2 d = vUV-0.5;
-  c *= 1.0 - 0.30*pow(length(d)*1.45, 2.2);
+  c *= 1.0 - 0.16*pow(length(d)*1.40, 2.4);
   // Damage flash: red edge burn that leaves the centre readable.
   float edge = smoothstep(0.16, 0.62, length(d));
   c = mix(c, vec3(0.62,0.05,0.07), uHurt * edge * 0.85);
   c = mix(c, vec3(0.9,0.2,0.2), uHurt * 0.10);
-  float bay = (bayer8(gl_FragCoord.xy) - 0.5) * 0.55;
-  c = floor(c*10.0 + 0.5 + bay)/10.0;
+  // Fine 4x4 ordered dither into 40 levels: a whisper of texture, not a screen door.
+  float bay = (bayer4(gl_FragCoord.xy) - 0.5) / 40.0;
+  c = floor(c*40.0 + 0.5 + bay)/40.0;
   outColor = vec4(clamp(c,0.0,1.0), 1.0);
 }`;
 
@@ -877,9 +982,9 @@ const postProg = makeProg(FS_VS, POST_FS, 'post');
 const tracerProg = makeProg(TRACER_VS, TRACER_FS, 'tracer');
 const trailProg = makeProg(TRAIL_VS, TRAIL_FS, 'trail');
 const shadowProg = makeProg(SHADOW_VS, SHADOW_FS, 'shadow');
-const SUN_DIR = vnorm([-0.86, 0.17, -0.40]);
-const FOG_COL = [0.80, 0.52, 0.44];
-const FOG_DENS = 0.00026;
+const SUN_DIR = vnorm([0.40, 0.15, -0.90]);
+const FOG_COL = [0.96, 0.77, 0.70];
+const FOG_DENS = 0.00022;
 </script>
 <script>
 /* DUSK PATROL — meshes.js
@@ -905,7 +1010,7 @@ attr(0, 2);
 gl.bindVertexArray(null);
 
 /* ---------- terrain ---------- */
-const TN = 160, TSTEP = WORLD / TN;
+const TN = 320, TSTEP = WORLD / TN;
 const th = new Float32Array((TN + 1) * (TN + 1));
 for (let j = 0; j <= TN; j++) {
   const z = -HALF + j * TSTEP;
@@ -974,18 +1079,20 @@ const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 function makeCloudTexture(seed) {
   const S = 64, r = mulberry32(seed);
   const blobs = [];
-  const nb = 5 + ((r() * 4) | 0);
-  for (let i = 0; i < nb; i++) blobs.push([0.18 + r() * 0.64, 0.30 + r() * 0.42, 0.12 + r() * 0.17]);
+  const nb = 4 + ((r() * 3) | 0);
+  for (let i = 0; i < nb; i++) blobs.push([0.16 + r() * 0.68, 0.40 + r() * 0.18, 0.18 + r() * 0.21]);
   return spriteTex(S, (x, y) => {
     const nx = x / S, ny = y / S;
     let f = 0;
     for (const b of blobs) {
-      const dx = (nx - b[0]) * 1.40, dy = (ny - b[1]) * 2.05;
+      const dx = (nx - b[0]) * 1.10, dy = (ny - b[1]) * 1.50;
       f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
     }
-    f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
+    f += (fbm(nx * 7 + seed, ny * 5) - 0.5) * 0.30;
+    // Flatten the underside so banks read as fair-weather cumulus.
+    f -= smoothstep(0.54, 0.84, ny) * 0.18;
     const b = (BAYER4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
-    return f > 0.30 || (f > 0.255 && b > 0) ? 1 : 0;
+    return f > 0.17 || (f > 0.12 && b > 0) ? 1 : 0;
   });
 }
 const cloudTexes = [makeCloudTexture(11), makeCloudTexture(29), makeCloudTexture(53), makeCloudTexture(97)];
@@ -1059,10 +1166,10 @@ attr(5, 3, 40, 28, 1); // wall colour
 gl.bindVertexArray(null);
 
 /* ---------- jet ---------- */
-const JET_LIGHT = rgb('#aebad4'), JET_MID = rgb('#5b6884'), JET_DARK = rgb('#2b3246');
-const JET_WING = rgb('#3f4a64'), JET_WING_BOT = rgb('#252c3e'), JET_EDGE = rgb('#d6e0f2');
-const JET_FIN = rgb('#2f374d'), JET_CANOPY = rgb('#1b3254'), JET_CANOPY_HI = rgb('#79c2e8');
-const JET_ORANGE = rgb('#ff5b2e'), JET_GOLD = rgb('#ff9b42');
+const JET_LIGHT = rgb('#e9e6e0'), JET_MID = rgb('#b7b8bc'), JET_DARK = rgb('#6b6e76');
+const JET_WING = rgb('#a7a8ac'), JET_WING_BOT = rgb('#6a6a72'), JET_EDGE = rgb('#f6f3ec');
+const JET_FIN = rgb('#7c7f88'), JET_CANOPY = rgb('#26344e'), JET_CANOPY_HI = rgb('#9fd6ee');
+const JET_ORANGE = rgb('#f2602f'), JET_GOLD = rgb('#ffa552');
 
 const jet = new MeshBuilder();
 function ringPts(z, rx, ry, y0) {
@@ -1123,20 +1230,9 @@ function buildWing(sign) {
     );
   }
   jet.quad(
-    [sign * 4.25, 0.08, 1.50], [sign * 4.25, 0.08, 2.15],
-    [sign * 4.95, 0.08, 2.15], [sign * 4.95, 0.08, 1.48],
+    [sign * 3.55, 0.08, 2.62], [sign * 4.95, 0.08, 2.15],
+    [sign * 4.95, 0.08, 1.45], [sign * 3.55, 0.08, 1.72],
     JET_ORANGE, [0, 1, 0]
-  );
-  // Bold squadron wing stripe so banking flashes vividly from Chase & Overhead views.
-  jet.quad(
-    [sign * 1.55, 0.08, -0.75], [sign * 2.35, 0.08, -0.25],
-    [sign * 3.85, 0.08, 2.18], [sign * 2.95, 0.08, 2.52],
-    JET_ORANGE, [0, 1, 0]
-  );
-  jet.quad(
-    [sign * 1.55, -0.24, -0.75], [sign * 2.95, -0.24, 2.52],
-    [sign * 3.85, -0.24, 2.18], [sign * 2.35, -0.24, -0.25],
-    JET_GOLD, [0, -1, 0]
   );
 }
 buildWing(1); buildWing(-1);
@@ -1308,6 +1404,21 @@ function makeDynamic(floats, layout) {
 const POINT_MAX = 900;
 const { vao: pointVao, vbo: pointVbo, data: pointData } =
   makeDynamic(POINT_MAX * 8, [[0, 3], [1, 3], [2, 1], [3, 1]]);
+// Static scenery points (trees & scrub) share the point shader but live in their own buffer.
+const SCENERY_COL_A = rgb('#39462a'), SCENERY_COL_B = rgb('#52422c');
+const sceneryData = new Float32Array(treePoints.length * 8);
+for (let i = 0; i < treePoints.length; i++) {
+  const t = treePoints[i], o = i * 8, pick = t[3];
+  const col = pick < 0.62 ? SCENERY_COL_A : (pick < 0.88 ? SCENERY_COL_B : rgb('#635a34'));
+  sceneryData[o] = t[0]; sceneryData[o + 1] = t[1]; sceneryData[o + 2] = t[2];
+  sceneryData[o + 3] = col[0]; sceneryData[o + 4] = col[1]; sceneryData[o + 5] = col[2];
+  sceneryData[o + 6] = 1.9 + pick * 1.4; sceneryData[o + 7] = pick;
+}
+const sceneryVao = gl.createVertexArray();
+gl.bindVertexArray(sceneryVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(sceneryData));
+attr(0, 3, 32, 0); attr(1, 3, 32, 12); attr(2, 1, 32, 24); attr(3, 1, 32, 28);
+gl.bindVertexArray(null);
 // Particles: six billboard corners of centre3, corner2, rgba4, size.
 function makeParticleVAO(max) {
   return Object.assign(makeDynamic(max * 60, [[0, 3], [1, 2], [2, 4], [3, 1]]), { max });
@@ -2695,7 +2806,7 @@ function updateTrails(dt) {
     const tr = wingTrails[s];
     for (let i = tr.length - 1; i >= 0; i--) {
       tr[i].age += dt;
-      if (tr[i].age > 1.35) tr.splice(i, 1);
+      if (tr[i].age > 2.2) tr.splice(i, 1);
     }
   }
   if (!plane.alive) return;
@@ -2706,8 +2817,8 @@ function updateTrails(dt) {
   const rx = camMat[0], ry = camMat[1], rz = camMat[2];
   const fx = -camMat[8], fy = -camMat[9], fz = -camMat[10];
   const gFactor = clamp(Math.abs(plane.inRoll) * 0.95 + Math.abs(plane.bankVel) * 0.25 + Math.abs(plane.inPitch) * 0.65 + (plane.barrelT > 0 ? 1.0 : 0) + plane.boost * 0.75, 0, 1.2);
-  const w = 0.08 + Math.min(1, gFactor) * 0.07;
-  const alpha = 0.42 + Math.min(1, gFactor) * 0.48;
+  const w = 0.045 + Math.min(1, gFactor) * 0.040;
+  const alpha = 0.50 + Math.min(1, gFactor) * 0.38;
   for (let s = 0; s < 2; s++) {
     const sign = s === 0 ? 1 : -1;
     const tr = wingTrails[s];
@@ -2953,10 +3064,11 @@ function updatePlane(dt) {
 }
 
 function updateTitlePlane() {
-  const a = game.time * 0.095, R = 780;
-  plane.pos[0] = -60 + Math.cos(a) * R;
-  plane.pos[2] = Math.sin(a) * R;
-  plane.pos[1] = 228 + Math.sin(game.time * 0.6) * 12;
+  // Attract orbit hugs the bay so the jet is always framed by water, coast and sun.
+  const a = 0.96 + game.time * 0.12, R = 70;
+  plane.pos[0] = -430 + Math.cos(a) * R;
+  plane.pos[2] = -300 + Math.sin(a) * R;
+  plane.pos[1] = 232 + Math.sin(game.time * 0.6) * 8;
   plane.yaw = Math.PI - a;
   plane.pitch = Math.cos(game.time * 0.6) * 0.06;
   plane.roll = 0.48; plane.rollPunch = 0; plane.inRoll = 0.42; plane.bankVel = 0;
@@ -2976,10 +3088,12 @@ function updateCamera(dt) {
   let posTau = CHASE_TAU.pos, lookTau = CHASE_TAU.look, upTau = CHASE_TAU.up;
 
   if (game.state === 'title') {
-    const a = game.time * 0.17;
-    eye = [plane.pos[0] + Math.cos(a) * 34, plane.pos[1] + 6 + 4 * Math.sin(a * 0.7), plane.pos[2] + Math.sin(a) * 34];
-    look = vadd(plane.pos, [0, -14, 0]);
-    upv = [0, 1, 0]; fov = 56;
+    // Hero chase: jet just below centre and large in frame, sun and coastline ahead.
+    const fx = -Math.sin(plane.yaw), fz = -Math.cos(plane.yaw);
+    const rx = Math.cos(plane.yaw), rz = -Math.sin(plane.yaw);
+    eye = [plane.pos[0] - fx * 28 - rx * 6, plane.pos[1] + 3.2, plane.pos[2] - fz * 28 - rz * 6];
+    look = [plane.pos[0] + fx * 46, plane.pos[1] + 0.5, plane.pos[2] + fz * 46];
+    upv = [0, 1, 0]; fov = 60;
     snap = true;
   } else if (game.state === 'results' || game.state === 'upgrade') {
     game.camAngle += dt * 0.22;
@@ -3001,11 +3115,11 @@ function updateCamera(dt) {
   } else if (game.camMode === 2) {
     // Overhead tactical view (stays smoothly centered over crash site too).
     const hFwd = vnorm([-Math.sin(plane.yaw), 0, -Math.cos(plane.yaw)]);
-    const alt = 104 + plane.boost * 18;
-    eye = [plane.pos[0] - hFwd[0] * 24, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 24];
-    look = [plane.pos[0] + hFwd[0] * 32, plane.pos[1] - 6, plane.pos[2] + hFwd[2] * 32];
+    const alt = 74 + plane.boost * 14;
+    eye = [plane.pos[0] - hFwd[0] * 18, plane.pos[1] + alt, plane.pos[2] - hFwd[2] * 18];
+    look = [plane.pos[0] + hFwd[0] * 26, plane.pos[1] - 4, plane.pos[2] + hFwd[2] * 26];
     upv = hFwd;
-    fov = 52 + plane.boost * 5;
+    fov = 48 + plane.boost * 5;
     posTau = 0.13; lookTau = 0.09; upTau = 0.13;
     if (game.state === 'play' && plane.alive) {
       eye = vadd(eye, vmul(plane.vel, posTau));
@@ -3024,9 +3138,9 @@ function updateCamera(dt) {
     cam.sway = lerp(cam.sway, targetSway, 1 - Math.exp(-dt * 8.5));
     const barrelKick = plane.barrelT > 0 ? Math.sin(plane.barrel) * 0.07 : 0;
     const blend = vnorm(vadd(vlerp([0, 1, 0], up, 0.28), vmul(right, barrelKick)));
-    const dist = 16.8 + plane.speed * 0.012 + plane.boost * 2.4;
-    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 5.2), vmul(right, cam.sway)));
-    look = vadd(plane.pos, vadd(vmul(fwd, 74), vadd(vmul(up, 2.1), vmul(right, cam.sway * 0.35))));
+    const dist = 18.0 + plane.speed * 0.010 + plane.boost * 2.2;
+    eye = vadd(vadd(plane.pos, vmul(fwd, -dist)), vadd(vmul(blend, 4.4), vmul(right, cam.sway)));
+    look = vadd(plane.pos, vadd(vmul(fwd, 82), vadd(vmul(up, -4.2), vmul(right, cam.sway * 0.35))));
     upv = blend; fov = 62 + plane.boost * 12 + Math.abs(plane.inRoll) * 3.2;
     if (game.state === 'play' && plane.alive) {
       const vel = plane.vel;
@@ -3180,8 +3294,8 @@ function drawSky() {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-const SOLID_SUN = [1.0, 0.78, 0.50], SOLID_AMB = [0.44, 0.42, 0.64];
-const JET_SUN = [1.0, 0.84, 0.60], JET_AMB = [0.60, 0.58, 0.76];
+const SOLID_SUN = [1.02, 0.86, 0.63], SOLID_AMB = [0.62, 0.57, 0.74];
+const JET_SUN = [1.06, 0.93, 0.74], JET_AMB = [0.70, 0.68, 0.72];
 const shadowM = m4();
 function beginSolid() {
   gl.useProgram(solidProg);
@@ -3225,6 +3339,19 @@ function drawWater() {
   gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
 
+// Tree / scrub specks: one static point cloud, depth-tested against the land.
+function drawScenery() {
+  gl.useProgram(pointProg);
+  gl.uniformMatrix4fv(U(pointProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(pointProg, 'uCam'), cam.pos);
+  gl.uniform1f(U(pointProg, 'uTime'), 0);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.bindVertexArray(sceneryVao);
+  gl.drawArrays(gl.POINTS, 0, treePoints.length);
+  gl.disable(gl.BLEND);
+}
+
 function drawCity() {
   gl.useProgram(cityProg);
   gl.uniformMatrix4fv(U(cityProg, 'uVP'), false, vpM);
@@ -3260,12 +3387,12 @@ function drawShadows() {
     if (dx * dx + dz * dz > 2800 * 2800) continue;
     const rad = c.sx * 0.92, rz = c.sy * 1.45;
     const gh = terrainHeight(sx, sz);
-    if (gh > 42) continue;
-    const sy = Math.max(gh, 0) + 0.55;
+    if (gh < 2) continue; // keep the sea clean: no hard-edged cloud shadows on water
+    const sy = gh + 0.55;
     if (!sphereInFrustum(sx, sy, sz, Math.max(rad, rz))) continue;
     const dist = Math.hypot(dx, sy - cam.pos[1], dz);
     if (dist > 2800) continue;
-    const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
+    const alpha = 0.17 * (1 - smoothstep(1400, 2800, dist));
     if (alpha < 0.02) continue;
     m4id(shadowM);
     shadowM[0] = rad; shadowM[10] = rz;
@@ -3336,8 +3463,8 @@ function drawTrails() {
     for (let i = 0; i < tr.length - 1; i++) {
       if (q >= TRAIL_QUAD_MAX) break;
       const a = tr[i], b = tr[i + 1];
-      const ta = clamp(1 - a.age / 1.35, 0, 1);
-      const tb = clamp(1 - b.age / 1.35, 0, 1);
+      const ta = clamp(1 - a.age / 2.2, 0, 1);
+      const tb = clamp(1 - b.age / 2.2, 0, 1);
       if (ta <= 0.01 && tb <= 0.01) continue;
       // Camera-facing ribbon cross axis so trails stay crisp in Chase, Overhead & Cinema.
       const tx = b.p[0] - a.p[0], ty = b.p[1] - a.p[1], tz = b.p[2] - a.p[2];
@@ -3353,24 +3480,24 @@ function drawTrails() {
       // Scale ribbon width gently when far (Overhead view) while keeping close chase trails razor-crisp.
       const farScale = clamp(distA / 48, 0.75, 2.4);
       const wa = a.w * farScale * (0.35 + 0.65 * ta), wb = b.w * farScale * (0.35 + 0.65 * tb);
-      const aa = a.a * ta * ta * nearA, ab = b.a * tb * tb * nearB;
+      const aa = a.a * ta * nearA, ab = b.a * tb * nearB;
       const ax0 = a.p[0] - sx * wa, ay0 = a.p[1] - sy * wa, az0 = a.p[2] - sz * wa;
       const ax1 = a.p[0] + sx * wa, ay1 = a.p[1] + sy * wa, az1 = a.p[2] + sz * wa;
       const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
       const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
       let o = q * 42;
       trailData[o] = ax0; trailData[o + 1] = ay0; trailData[o + 2] = az0;
-      trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = aa;
+      trailData[o + 3] = 1.0; trailData[o + 4] = 0.99; trailData[o + 5] = 0.96; trailData[o + 6] = aa;
       trailData[o + 7] = ax1; trailData[o + 8] = ay1; trailData[o + 9] = az1;
-      trailData[o + 10] = 1.0; trailData[o + 11] = 0.96; trailData[o + 12] = 0.90; trailData[o + 13] = aa;
+      trailData[o + 10] = 1.0; trailData[o + 11] = 0.99; trailData[o + 12] = 0.96; trailData[o + 13] = aa;
       trailData[o + 14] = bx1; trailData[o + 15] = by1; trailData[o + 16] = bz1;
-      trailData[o + 17] = 1.0; trailData[o + 18] = 0.96; trailData[o + 19] = 0.90; trailData[o + 20] = ab;
+      trailData[o + 17] = 1.0; trailData[o + 18] = 0.99; trailData[o + 19] = 0.96; trailData[o + 20] = ab;
       trailData[o + 21] = ax0; trailData[o + 22] = ay0; trailData[o + 23] = az0;
-      trailData[o + 24] = 1.0; trailData[o + 25] = 0.96; trailData[o + 26] = 0.90; trailData[o + 27] = aa;
+      trailData[o + 24] = 1.0; trailData[o + 25] = 0.99; trailData[o + 26] = 0.96; trailData[o + 27] = aa;
       trailData[o + 28] = bx1; trailData[o + 29] = by1; trailData[o + 30] = bz1;
-      trailData[o + 31] = 1.0; trailData[o + 32] = 0.96; trailData[o + 33] = 0.90; trailData[o + 34] = ab;
+      trailData[o + 31] = 1.0; trailData[o + 32] = 0.99; trailData[o + 33] = 0.96; trailData[o + 34] = ab;
       trailData[o + 35] = bx0; trailData[o + 36] = by0; trailData[o + 37] = bz0;
-      trailData[o + 38] = 1.0; trailData[o + 39] = 0.96; trailData[o + 40] = 0.90; trailData[o + 41] = ab;
+      trailData[o + 38] = 1.0; trailData[o + 39] = 0.99; trailData[o + 40] = 0.96; trailData[o + 41] = ab;
       q++;
     }
   }
@@ -3429,23 +3556,40 @@ function drawClouds() {
   gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
   gl.uniform1i(U(cloudProg, 'uTex'), 0);
-  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
+  gl.uniform3fv(U(cloudProg, 'uShade'), [0.74, 0.67, 0.79]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  const halfTan = Math.tan(cam.fov * DEG * 0.5);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    const dx = cx - cam.pos[0], dy = c.y - cam.pos[1], dz = c.z - cam.pos[2];
+    const dist = Math.hypot(dx, dy, dz);
+    // A card the camera is inside reads as a screen-filling white wall; skip it.
+    if (dist < Math.max(c.sx, c.sy) * 0.85) continue;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
+    // Fade a card out as its projection passes a comfortable size: an
+    // oversized billboard reads as flat fog, not as a cloud.
+    const over = Math.max(
+      (c.sy / dist) / (halfTan * 0.95),
+      (c.sx / dist) / (halfTan * (W / H) * 1.15)
+    );
+    const fade = clamp((1.0 - over) / 0.30, 0.0, 1.0);
+    if (fade <= 0.02) continue;
+    gl.uniform1f(U(cloudProg, 'uAlpha'), fade);
     // Spherical billboarding keeps clouds volumetric from Overhead, Chase and Cockpit views.
     cloudM[0] = camRight[0] * c.sx; cloudM[1] = camRight[1] * c.sx; cloudM[2] = camRight[2] * c.sx; cloudM[3] = 0;
     cloudM[4] = camUp[0] * c.sy;    cloudM[5] = camUp[1] * c.sy;    cloudM[6] = camUp[2] * c.sy;    cloudM[7] = 0;
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.08; cloudTint[2] = 0.78;
+    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.06; cloudTint[2] = 0.94;
     gl.uniform3fv(U(cloudProg, 'uTint'), cloudTint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
+  gl.disable(gl.BLEND);
 }
 
 const PT_LIGHT = [1.0, 0.60, 0.26], PT_DRONE = [1.0, 0.18, 0.12], PT_MISSILE = [1.0, 0.86, 0.55];
@@ -3599,13 +3743,17 @@ function renderScene() {
 
   drawTerrain();
   drawWater();
+  drawScenery();
   drawShadows();
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
   drawEnemies();
-  drawClouds();
-  if (game.state === 'title' || game.camMode !== 1) drawTrails();
+  // Overhead is a clean tactical map: clouds seen from above read as flat cards.
+  if (game.camMode !== 2) drawClouds();
+  // World-space ribbons balloon as they cross the near plane, so contrails only
+  // render from the high/side cameras where the whole trail is readable.
+  if (game.state !== 'title' && game.camMode >= 2) drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);
@@ -3637,6 +3785,33 @@ function renderScene() {
 
 function pad(n, w) { return String(Math.max(0, Math.floor(n))).padStart(w, '0'); }
 function blinkOn(rate) { return Math.sin(game.time * rate) > -0.2; }
+
+/* ---------- chrome ---------- */
+// Flat top / bottom bars with a hairline accent, in the spirit of a modern flight HUD.
+function drawBarsTopBottom() {
+  hud.fillStyle = 'rgba(12,10,20,0.80)';
+  hud.fillRect(0, 0, W, 15);
+  hud.fillRect(0, H - 15, W, 15);
+  hud.fillStyle = 'rgba(255,180,92,0.22)';
+  hud.fillRect(0, 15, W, 1);
+  hud.fillRect(0, H - 16, W, 1);
+}
+function drawChip(x, y, label, color, align) {
+  const w = textWidth(label, 1, 1) + 10;
+  const bx = align === 'right' ? x - w : x;
+  hud.fillStyle = 'rgba(12,10,20,0.62)';
+  hud.fillRect(bx, y, w, 11);
+  hud.fillStyle = 'rgba(255,180,92,0.26)';
+  hud.fillRect(bx, y, w, 1);
+  drawText(label, bx + 5, y + 2, color, 1, 1);
+  return bx;
+}
+function drawMiniBar(x, y, w, frac, col) {
+  hud.fillStyle = 'rgba(242,230,208,0.14)';
+  hud.fillRect(x, y, w, 3);
+  const fw = Math.round(w * clamp(frac, 0, 1));
+  if (fw > 0) { hud.fillStyle = col; hud.fillRect(x, y, fw, 3); }
+}
 
 /* ---------- small widgets ---------- */
 // Horizontal gauge with a label, a value readout and an optional overheat tint.
@@ -3784,45 +3959,54 @@ function drawRadar(cx, cy, r) {
 
 /* ---------- title ---------- */
 function drawTitleScreen() {
-  hud.fillStyle = 'rgba(6,4,12,0.32)';
+  // Left-anchored type over the scenery, with a soft side scrim for legibility.
+  const side = hud.createLinearGradient(0, 0, W * 0.72, 0);
+  side.addColorStop(0, 'rgba(8,6,14,0.78)');
+  side.addColorStop(0.55, 'rgba(8,6,14,0.30)');
+  side.addColorStop(1, 'rgba(8,6,14,0.0)');
+  hud.fillStyle = side;
   hud.fillRect(0, 0, W, H);
-  const tw = textWidth('DUSK PATROL', 3, 2);
-  const tx = Math.round((W - tw) / 2);
-  drawText('DUSK PATROL', tx + 2, 40, COL.dark, 3, 2);
-  drawText('DUSK PATROL', tx, 37, COL.amber, 3, 2);
-  hud.fillStyle = 'rgba(255,180,92,0.5)';
-  hud.fillRect(160, 74, 160, 1);
-  drawTextC('ENDLESS WAVE CAMPAIGN', 240, 82, COL.bone, 1, 0);
-  drawTextC('BEST  ' + pad(game.best, 6) + '   WAVE  ' + campaign.bestWave, 240, 96, COL.amber, 1, 0);
-  if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY', 240, 122, COL.bone, 1, 1);
+  const bottom = hud.createLinearGradient(0, H - 66, 0, H);
+  bottom.addColorStop(0, 'rgba(8,6,14,0)');
+  bottom.addColorStop(1, 'rgba(8,6,14,0.82)');
+  hud.fillStyle = bottom;
+  hud.fillRect(0, H - 66, W, 66);
 
-  hud.fillStyle = 'rgba(8,6,16,0.45)';
-  hud.fillRect(64, 146, 352, 96);
-  hud.fillStyle = 'rgba(255,180,92,0.25)';
-  hud.fillRect(64, 146, 352, 1);
+  // Small sector chip over the title, like a mission slate.
+  const chipW = textWidth('ENDLESS WAVE CAMPAIGN', 1, 1) + 12;
+  hud.fillStyle = 'rgba(12,10,20,0.72)';
+  hud.fillRect(28, 96, chipW, 13);
+  hud.fillStyle = 'rgba(255,180,92,0.55)';
+  hud.fillRect(28, 96, 2, 13);
+  drawText('ENDLESS WAVE CAMPAIGN', 36, 99, COL.bone, 1, 1);
+
+  drawText('DUSK', 28, 118, 'rgba(24,8,14,0.92)', 4, 1);
+  drawText('DUSK', 26, 115, COL.amber, 4, 1);
+  drawText('PATROL', 28, 160, 'rgba(24,8,14,0.92)', 4, 1);
+  drawText('PATROL', 26, 157, COL.bone, 4, 1);
+
+  hud.fillStyle = 'rgba(255,180,92,0.65)';
+  hud.fillRect(28, 198, 96, 1);
+  drawText('BEST ' + pad(game.best, 6) + '    WAVE ' + campaign.bestWave, 28, 205, COL.dim, 1, 1);
+
+  const prompt = touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY';
+  if (blinkOn(3.4)) {
+    drawText(prompt, 28, 222, COL.amber, 1, 1);
+    hud.fillStyle = COL.amber;
+    hud.beginPath(); hud.moveTo(22, 222); hud.lineTo(22, 228); hud.lineTo(27, 225); hud.closePath(); hud.fill();
+  }
+
+  // Controls live in the bottom strip, so the landscape stays readable.
+  drawBarsTopBottom();
+  hud.fillStyle = 'rgba(10,8,16,0.55)';
+  hud.fillRect(0, H - 28, W, 13);
   if (touch.on) {
-    drawTextSh('LEFT STICK', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
-    drawTextSh('FIRE', 76, 168, COL.amber, 1, 0); drawTextSh('HOLD: AUTOCANNON', 178, 168, COL.bone, 1, 0);
-    drawTextSh('MSL', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE LOCK', 178, 180, COL.bone, 1, 0);
-    drawTextSh('FLARE', 76, 192, COL.amber, 1, 0); drawTextSh('BREAK LOCK', 178, 192, COL.bone, 1, 0);
-    drawTextSh('BOOST', 262, 156, COL.amber, 1, 0); drawTextSh('AFTERBURNER', 322, 156, COL.bone, 1, 0);
-    drawTextSh('ROLL', 262, 168, COL.amber, 1, 0); drawTextSh('DODGE', 322, 168, COL.bone, 1, 0);
-    drawTextSh('CAM', 262, 180, COL.amber, 1, 0); drawTextSh('VIEW', 322, 180, COL.bone, 1, 0);
-    drawTextSh('II', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE', 322, 192, COL.bone, 1, 0);
-    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS' : 'CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
-    drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
+    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS' : 'STICK FLY   FIRE   MSL   FLARE   BOOST   ROLL   CAM', 240, H - 11, COL.bone, 1, 0);
+    drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, H - 24, COL.dim, 1, 0);
     return;
   }
-  drawTextSh('WASD / ARROWS', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
-  drawTextSh('SPACE / LMB', 76, 168, COL.amber, 1, 0); drawTextSh('AUTOCANNON', 178, 168, COL.bone, 1, 0);
-  drawTextSh('F / RMB', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE', 178, 180, COL.bone, 1, 0);
-  drawTextSh('X', 76, 192, COL.amber, 1, 0); drawTextSh('FLARES', 178, 192, COL.bone, 1, 0);
-  drawTextSh('SHIFT', 262, 156, COL.amber, 1, 0); drawTextSh('BOOST', 322, 156, COL.bone, 1, 0);
-  drawTextSh('B / 2X A,D', 262, 168, COL.amber, 1, 0); drawTextSh('ROLL', 336, 168, COL.bone, 1, 0);
-  drawTextSh('C / 1-4', 262, 180, COL.amber, 1, 0); drawTextSh('CAMERA', 322, 180, COL.bone, 1, 0);
-  drawTextSh('P / M / R', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE MUTE RETRY', 322, 192, COL.bone, 1, 0);
-  drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
-  drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
+  drawTextC('WASD FLY   SPACE FIRE   F MSL   X FLARE   SHIFT BOOST   B ROLL   C CAM', 240, H - 11, COL.bone, 1, 0);
+  drawTextC('P PAUSE   M MUTE   R RETRY     CLEAR EVERY WAVE, THEN PICK ONE UPGRADE', 240, H - 24, COL.dim, 1, 0);
 }
 
 /* ---------- cockpit (pixel-art canopy, HUD combiner & instrument dash) ---------- */
@@ -4188,28 +4372,33 @@ function drawCockpitFrame() {
 /* ---------- flight HUD ---------- */
 function drawBars() {
   const m = game.mods;
-  // Hull and shield, bottom-left.
-  drawTextSh('HULL ' + Math.ceil(game.hull), 8, 224, game.hull / m.hullMax > 0.3 ? COL.bone : COL.red, 1, 0);
-  drawGauge(8, 234, 78, 4, game.hull / m.hullMax, game.hull / m.hullMax > 0.3 ? '#5ee0d0' : '#ff5a5f');
-  drawGauge(8, 242, 78, 3, game.shield / m.shieldMax, '#5fa8ff');
+  // Hull and shield, bottom-left, on a dark plate so they read over any terrain.
+  hud.fillStyle = 'rgba(12,10,20,0.58)';
+  hud.fillRect(6, 221, 112, 31);
+  hud.fillStyle = 'rgba(255,180,92,0.24)';
+  hud.fillRect(6, 221, 112, 1);
+  drawText('HULL ' + Math.ceil(game.hull), 10, 225, game.hull / m.hullMax > 0.3 ? COL.bone : COL.red, 1, 0);
+  drawText('SHLD', 74, 225, COL.dim, 1, 0);
+  drawMiniBar(10, 234, 104, game.hull / m.hullMax, game.hull / m.hullMax > 0.3 ? '#63e2d2' : '#ff5a5f');
+  drawMiniBar(10, 240, 104, game.shield / m.shieldMax, '#6fb6ff');
 
-  // Heat, bottom-right, under the radar.
+  // Heat, tucked into the bottom bar between the camera tag and the weapon readout.
   const heat = weapons.heat / 100;
   const over = weapons.overheated;
-  drawTextR(over ? 'OVERHEAT' : 'HEAT', 472, 232, over ? COL.red : COL.dim, 1, 0);
-  drawGauge(394, 242, 78, 4, heat, over ? (blinkOn(14) ? '#ff5a5f' : '#ffb45c') : heat > 0.7 ? '#ffb45c' : '#f2e6d0');
+  drawText('HEAT', 140, 258, over ? COL.red : COL.dim, 1, 0);
+  drawMiniBar(170, 266, 62, heat, over ? (blinkOn(14) ? '#ff5a5f' : '#ffb45c') : heat > 0.7 ? '#ffb45c' : '#f2e6d0');
+  if (over) drawTextC('OVERHEAT', 240, 246, blinkOn(14) ? COL.red : COL.dim, 1, 1);
 }
 
 function drawWaveInfo() {
-  drawTextSh('WAVE ' + campaign.wave, 8, 6, COL.amber, 1, 0);
   const left = campaign.queue.length + aliveEnemies();
-  drawTextSh(campaign.bossWave ? 'BOSS' : left + ' LEFT', 8, 18, campaign.bossWave ? COL.red : COL.dim, 1, 0);
+  drawChip(8, 19, campaign.bossWave ? 'BOSS WAVE' : 'WAVE ' + pad(campaign.wave, 2) + '   ' + left + ' LEFT',
+    campaign.bossWave ? COL.red : COL.bone, 'left');
   if (campaign.boss && campaign.boss.alive) {
     const b = campaign.boss;
     const f = clamp(b.hp / b.maxHp, 0, 1);
-    const w = 150;
-    drawGauge(Math.round(240 - w / 2), 32, w, 4, f, f > 0.5 ? '#ff8a5c' : '#ff5a5f', 'rgba(8,6,16,0.7)');
-    drawTextC('CARRIER', 240, 40, COL.red, 1, 0);
+    drawText('CARRIER', 8, 35, COL.red, 1, 1);
+    drawMiniBar(52, 36, 92, f, f > 0.5 ? '#ff8a5c' : '#ff5a5f');
   }
 }
 
@@ -4232,39 +4421,43 @@ function drawPlayHUD() {
     drawCockpitProjector();
     drawCockpitFrame();
   } else {
-    hud.fillStyle = 'rgba(8,6,16,0.34)';
-    hud.fillRect(0, H - 14, W, 14);
+    drawBarsTopBottom();
   }
 
   const camName = ['CHASE', 'FPV', 'TOP', 'CINEMA'][game.camMode];
-  if (!fpv) drawTextSh('DP ' + camName, 8, 258, COL.dim, 1, 0);
-
   drawWaveInfo();
-  drawTextC(pad(game.score, 6), 240, 2, COL.amber, 2, 0);
-  if (game.combo > 1) {
-    drawTextC('X' + game.combo + ' COMBO', 240, 20, blinkOn(10) ? COL.amber : COL.bone, 1, 0);
-  }
-  drawTextR('BEST ' + pad(game.best, 6), 472, 6, COL.dim, 1, 0);
+  if (!fpv) drawChip(472, 19, camName, COL.dim, 'right');
+  drawTextC(pad(game.score, 6), 240, 0, COL.amber, 2, 1);
+  drawText('DUSK PATROL', 17, 4, COL.bone, 1, 1);
+  hud.fillStyle = COL.amber;
+  hud.beginPath(); hud.moveTo(8, 4); hud.lineTo(14, 7.5); hud.lineTo(8, 11); hud.closePath(); hud.fill();
+  drawTextR('BEST ' + pad(game.best, 6), 472, 4, COL.dim, 1, 0);
+
   if (!fpv) {
-    drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax, 472, 18, weapons.ammo ? COL.bone : COL.red, 1, 0);
-    drawTextR('FLR ' + weapons.flares, 472, 30, weapons.flares ? COL.bone : COL.dim, 1, 0);
     const ready = weapons.rollCd <= 0;
-    drawTextR('ROLL', 446, 42, ready ? COL.amber : COL.dim, 1, 0);
-    drawGauge(450, 44, 22, 3, ready ? 1 : clamp(1 - weapons.rollCd / game.mods.rollCd, 0, 1), ready ? '#ffb45c' : '#8f84a2');
+    drawText('DP ' + camName, 8, 258, COL.dim, 1, 1);
+    drawText('ROLL', 300, 258, ready ? COL.amber : COL.dim, 1, 0);
+    drawMiniBar(302, 266, 34, ready ? 1 : clamp(1 - weapons.rollCd / game.mods.rollCd, 0, 1), ready ? '#ffb45c' : '#8f84a2');
+    drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax + '   FLR ' + weapons.flares, 472, 258,
+      weapons.ammo ? COL.bone : COL.dim, 1, 0);
 
     drawBars();
-    drawRadar(W - 40, H - 66, 27);
+    drawRadar(W - 40, H - 66, 26);
+  }
+
+  if (game.combo > 1) {
+    drawTextC('X' + game.combo + ' COMBO', 240, 246, blinkOn(10) ? COL.amber : COL.bone, 1, 1);
   }
 
   if (plane.alive) {
-    let wy = (campaign.boss && campaign.boss.alive) ? 50 : (fpv ? 34 : 46);
+    let wy = (campaign.boss && campaign.boss.alive) ? 52 : (fpv ? 34 : 48);
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
     if (camMat[5] < -0.3 && plane.barrelT <= 0) warn('INVERTED', COL.amber);
   }
-  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 216, COL.dim, 1, 0);
+  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 214, COL.dim, 1, 0);
 
   if (!fpv && game.camMode !== 2) drawReticle();
   drawTargetBox();
