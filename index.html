@@ -5,13 +5,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DUSK PATROL — 무한 웨이브 픽셀 전투기</title>
 <meta name="description" content="WebGL2로 만든 480×270 픽셀 아트 전투기 게임. 무한 웨이브 캠페인, 5웨이브마다 항공모함 보스, 기관포·미사일·플레어·배럴 롤, 웨이브마다 고르는 강화 카드. 설치 없이 브라우저에서 바로 플레이.">
+<meta name="theme-color" content="#0a0714">
 <meta property="og:type" content="website">
 <meta property="og:title" content="DUSK PATROL">
 <meta property="og:description" content="노을진 해안 도시 상공에서 적 부대를 지우고 강화를 고르세요. 5웨이브마다 항모 보스가 등장하는 무한 웨이브 픽셀 플라이트 액션.">
 <meta property="og:image" content="https://jeiel85.github.io/dusk-patrol/docs/cover.png">
 <meta property="og:image:width" content="960">
 <meta property="og:image:height" content="540">
+<meta property="og:url" content="https://jeiel85.github.io/dusk-patrol/">
 <meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2307060c'/%3E%3Crect x='7' y='3' width='2' height='10' fill='%23ffb45c'/%3E%3Crect x='3' y='7' width='10' height='2' fill='%23ffb45c'/%3E%3C/svg%3E">
+<script>document.documentElement.classList.add('js');</script>
 <style>
   :root{
     --ink:#07060c;
@@ -20,167 +24,853 @@
     --bone:#f2e6d0;
     --dim:#9d92a8;
     --amber:#ffb45c;
+    --rust:#e46b4f;
     --teal:#5ee0d0;
     --mono:ui-monospace,"SFMono-Regular",Consolas,"Courier New",monospace;
     --sans:system-ui,-apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
   }
   *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased}
+  html{scroll-behavior:smooth;scroll-padding-top:76px}
+  body{margin:0;background:var(--ink);color:var(--bone);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased;overflow-x:hidden;word-break:keep-all}
   a{color:inherit}
+  ::selection{background:var(--amber);color:#1a0f14}
   :focus-visible{outline:2px solid var(--teal);outline-offset:3px}
+  .skip{position:absolute;left:12px;top:-60px;z-index:100;background:var(--amber);color:#1a0f14;font:700 12px/1 var(--mono);padding:12px 16px;text-decoration:none;transition:top .15s}
+  .skip:focus{top:12px}
+  .wrap{width:min(1080px,calc(100% - 40px));margin:0 auto;position:relative}
 
-  .sky{
-    position:relative;overflow:hidden;padding:0 0 96px;
-    background:linear-gradient(180deg,#100b1c 0%,#241634 40%,#5a2f45 70%,#a2554d 88%,#e48a55 100%);
-  }
-  .skyline{
-    position:absolute;left:0;right:0;bottom:0;height:132px;pointer-events:none;
-    background:
-      repeating-linear-gradient(90deg,transparent 0 7px,rgba(255,180,92,.20) 7px 8px),
-      repeating-linear-gradient(0deg,transparent 0 10px,rgba(255,180,92,.13) 10px 11px),
-      #0b0812;
-    clip-path:polygon(0 100%,0 62%,4% 62%,4% 45%,7% 45%,7% 71%,10% 71%,10% 34%,14% 34%,14% 55%,17% 55%,17% 22%,21% 22%,21% 49%,24% 49%,24% 64%,28% 64%,28% 39%,32% 39%,32% 15%,36% 15%,36% 52%,39% 52%,39% 30%,43% 30%,43% 58%,47% 58%,47% 26%,51% 26%,51% 47%,55% 47%,55% 68%,59% 68%,59% 37%,63% 37%,63% 19%,67% 19%,67% 54%,71% 54%,71% 41%,75% 41%,75% 63%,79% 63%,79% 28%,83% 28%,83% 50%,87% 50%,87% 36%,91% 36%,91% 59%,95% 59%,95% 44%,100% 44%,100% 100%);
-  }
-  .wrap{width:min(1080px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
-  .kicker{font:700 11px/1 var(--mono);letter-spacing:.32em;text-transform:uppercase;color:var(--amber)}
-  .hero{padding:64px 0 34px;max-width:720px}
+  /* scroll progress */
+  .progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:60;background:linear-gradient(90deg,var(--amber),var(--rust) 55%,var(--teal));transform:scaleX(0);transform-origin:left center;will-change:transform}
+
+  /* top nav */
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:50;transition:background .25s ease,border-color .25s ease,backdrop-filter .25s ease;border-bottom:1px solid transparent}
+  .topbar.stuck{background:rgba(7,6,12,.72);border-bottom-color:rgba(255,180,92,.18);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+  .topbar-inner{width:min(1080px,calc(100% - 40px));margin:0 auto;height:64px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+  .wordmark{display:inline-flex;align-items:center;gap:10px;text-decoration:none;font:800 12px/1 var(--mono);letter-spacing:.18em;color:var(--bone)}
+  .wordmark i{width:9px;height:9px;background:var(--amber);box-shadow:0 0 12px rgba(255,180,92,.8);display:block}
+  .topbar-links{display:flex;align-items:center;gap:24px;font:700 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase}
+  .topbar-links a{color:var(--dim);text-decoration:none;transition:color .15s}
+  .topbar-links a:hover{color:var(--teal)}
+  .topbar-links a.ext{color:var(--amber)}
+
+  /* hero */
+  .hero-shell{position:relative;min-height:100vh;min-height:100svh;display:flex;align-items:center;overflow:hidden;background:#0a0714;isolation:isolate}
+  #sky{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated;image-rendering:crisp-edges}
+  .hero-shade{position:absolute;inset:0;pointer-events:none;z-index:1;background:
+    radial-gradient(100% 70% at 50% 108%,rgba(7,6,12,0) 38%,rgba(7,6,12,.55) 100%),
+    linear-gradient(180deg,rgba(7,6,12,.74) 0%,rgba(7,6,12,.20) 26%,rgba(7,6,12,0) 52%,rgba(7,6,12,.86) 100%)}
+  .hero-scan{position:absolute;inset:0;pointer-events:none;z-index:1;background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px);opacity:.16}
+  .hero-inner{position:relative;z-index:2;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:48px;padding:128px 0 124px}
+  .hero-copy{max-width:760px}
+  .kicker{display:flex;align-items:center;gap:10px;min-height:13px;font:700 10px/1 var(--mono);letter-spacing:.3em;text-transform:uppercase;color:var(--amber)}
+  .live-dot{width:7px;height:7px;background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.2s steps(2,end) infinite;flex:0 0 auto}
+  @keyframes pulse{50%{opacity:.3}}
+  .caret{width:7px;height:12px;background:var(--amber);animation:caret 1s steps(2,end) infinite;flex:0 0 auto}
+  @keyframes caret{50%{opacity:0}}
   h1{
-    font:900 clamp(52px,10vw,104px)/.9 var(--mono);
-    letter-spacing:-.05em;margin:20px 0 16px;
-    text-shadow:3px 3px 0 rgba(228,107,79,.75),6px 6px 0 rgba(58,36,66,.75);
+    font:900 clamp(56px,9.4vw,116px)/.86 var(--mono);
+    letter-spacing:-.055em;margin:22px 0 24px;color:var(--bone);
+    text-shadow:
+      calc(3px + var(--px,0) * 5px) calc(3px + var(--py,0) * 4px) 0 rgba(228,107,79,.82),
+      calc(6px + var(--px,0) * 9px) calc(6px + var(--py,0) * 7px) 0 rgba(48,29,58,.92);
   }
-  .lead{font-size:clamp(16px,2.2vw,20px);color:#ffe9d4;max-width:620px;margin:0 0 26px}
-  .actions{display:flex;flex-wrap:wrap;gap:12px}
+  h1 span{display:block}
+  .lead{font-size:clamp(15px,1.6vw,19px);color:#ffe9d4;max-width:620px;margin:0 0 28px;text-shadow:0 2px 10px rgba(7,6,12,.85),0 0 26px rgba(7,6,12,.55)}
+  .actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:24px}
   .btn{
     display:inline-flex;align-items:center;gap:9px;
-    font:700 13px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;
-    padding:14px 20px;border:2px solid var(--amber);background:var(--amber);color:#1a0f14;
+    font:700 12px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    padding:15px 20px;border:2px solid var(--amber);background:var(--amber);color:#1a0f14;
     text-decoration:none;box-shadow:4px 4px 0 rgba(228,107,79,.8);
     transition:transform .12s ease,box-shadow .12s ease;
   }
   .btn:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 rgba(228,107,79,.8)}
-  .btn.ghost{background:transparent;color:var(--bone);border-color:var(--line);box-shadow:none}
+  .btn:active{transform:translate(0,0);box-shadow:3px 3px 0 rgba(228,107,79,.8)}
+  .btn.ghost{background:rgba(7,6,12,.35);color:var(--bone);border-color:var(--line);box-shadow:none;backdrop-filter:blur(6px)}
   .btn.ghost:hover{border-color:var(--teal);color:var(--teal)}
+  .hero-tags{display:flex;flex-wrap:wrap;gap:7px;margin:0;padding:0;list-style:none}
+  .hero-tags li{font:700 9px/1 var(--mono);letter-spacing:.16em;color:#cbb9c4;border:1px solid rgba(242,230,208,.18);background:rgba(7,6,12,.4);padding:7px 8px;backdrop-filter:blur(4px)}
+  .hero-rail{display:flex;flex-direction:column;gap:18px;padding:0 18px 6px 0;border-right:1px solid rgba(255,180,92,.28);text-align:right;min-width:112px}
+  .rail-item span{display:block;font:700 8px/1 var(--mono);letter-spacing:.32em;color:var(--dim);margin-bottom:5px}
+  .rail-item strong{font:700 17px/1 var(--mono);letter-spacing:.08em;color:var(--teal);font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(94,224,208,.3)}
+  .rail-line{height:28px;border-right:2px solid rgba(255,180,92,.5);align-self:flex-end;margin-top:2px}
+  .scroll-cue{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:8px;text-decoration:none;font:700 8px/1 var(--mono);letter-spacing:.34em;color:rgba(242,230,208,.55)}
+  .scroll-cue:hover{color:var(--amber)}
+  .scroll-cue i{width:1px;height:28px;background:linear-gradient(180deg,var(--amber),transparent);animation:cue 1.8s ease-in-out infinite;transform-origin:top}
+  @keyframes cue{0%,100%{transform:scaleY(.35);opacity:.4}50%{transform:scaleY(1);opacity:1}}
 
-  .features{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:8px 0 4px}
-  .feature{border:1px solid var(--line);background:rgba(12,10,22,.62);padding:16px 16px 18px}
-  .feature .idx{font:700 10px/1 var(--mono);letter-spacing:.2em;color:var(--amber)}
-  .feature h2{font:700 14px/1.3 var(--mono);letter-spacing:.06em;margin:10px 0 6px;color:var(--bone)}
-  .feature p{margin:0;color:#d8c7be;font-size:13px;line-height:1.55}
+  /* ticker */
+  .ticker{border-top:1px solid rgba(255,180,92,.24);border-bottom:1px solid rgba(255,180,92,.14);background:#0a0712;overflow:hidden;position:relative;z-index:2}
+  .ticker-track{display:flex;width:max-content;animation:ticker 38s linear infinite}
+  .ticker:hover .ticker-track{animation-play-state:paused}
+  .ticker-set{display:flex;align-items:center}
+  .ticker-set span{display:flex;align-items:center;gap:14px;padding:10px 20px;font:700 9.5px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:#c8a98f;white-space:nowrap}
+  .ticker-set span::after{content:"";width:5px;height:5px;background:var(--rust);transform:rotate(45deg)}
+  @keyframes ticker{to{transform:translateX(-50%)}}
 
-  .demo-block{position:relative;padding:34px 0 64px}
-  .demo-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;flex-wrap:wrap}
-  .section-label{font:700 11px/1 var(--mono);letter-spacing:.32em;text-transform:uppercase;color:var(--amber);display:flex;align-items:center;gap:10px}
-  .live-dot{width:7px;height:7px;background:var(--teal);box-shadow:0 0 10px var(--teal)}
+  /* sections */
+  .briefing{padding:82px 0 34px;position:relative}
+  .briefing::before{content:"";position:absolute;inset:0;pointer-events:none;background:
+    linear-gradient(rgba(255,180,92,.035) 1px,transparent 1px) 0 0/100% 48px,
+    radial-gradient(60% 45% at 50% 0%,rgba(94,224,208,.06),transparent 70%);
+    -webkit-mask-image:linear-gradient(180deg,#000,transparent 72%);mask-image:linear-gradient(180deg,#000,transparent 72%)}
+  .briefing .wrap,.demo-block .wrap{position:relative;z-index:1}
+  .section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;padding-bottom:20px;margin-bottom:26px;border-bottom:1px solid var(--line)}
+  .section-label{font:700 10px/1 var(--mono);letter-spacing:.3em;text-transform:uppercase;color:var(--amber);display:flex;align-items:center;gap:10px}
+  .section-label::before{content:"";width:18px;height:2px;background:var(--amber)}
+  .section-title{font:800 clamp(25px,3.4vw,38px)/1.1 var(--mono);letter-spacing:-.03em;margin:12px 0 0}
+  .section-note{max-width:340px;margin:0 0 3px;color:var(--dim);font:500 11.5px/1.7 var(--mono)}
+
+  /* feature cards */
+  .features{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .feature{
+    position:relative;padding:18px 18px 20px;border:1px solid var(--line);
+    background:linear-gradient(165deg,rgba(20,17,33,.94),rgba(9,7,16,.94));
+    overflow:hidden;transform-style:preserve-3d;will-change:transform;
+    transition:border-color .2s ease,box-shadow .2s ease,transform .18s ease-out;
+  }
+  .feature::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .2s;background:radial-gradient(220px circle at var(--mx,50%) var(--my,50%),rgba(255,180,92,.13),transparent 62%)}
+  .feature:hover::before{opacity:1}
+  .feature::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:linear-gradient(90deg,var(--amber),var(--rust) 60%,transparent);transform:scaleX(0);transform-origin:left;transition:transform .35s ease}
+  .feature:hover::after{transform:scaleX(1)}
+  .feature:hover{border-color:rgba(255,180,92,.42);box-shadow:0 20px 44px rgba(0,0,0,.4)}
+  .feature-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:16px}
+  .idx{font:700 9px/1 var(--mono);letter-spacing:.22em;color:var(--amber)}
+  .icon{width:30px;height:30px;color:var(--amber);flex:0 0 auto;transition:color .2s,transform .2s;filter:drop-shadow(0 0 10px rgba(255,180,92,.22))}
+  .feature:hover .icon{color:var(--teal);transform:translateY(-2px)}
+  .feature h3{font:700 15px/1.3 var(--mono);letter-spacing:.04em;margin:0 0 8px}
+  .feature p{margin:0;color:#cdbcb8;font-size:13px;line-height:1.62}
+
+  /* demo */
+  .demo-block{padding:70px 0 92px;position:relative}
   .console{
-    position:relative;border:1px solid rgba(255,180,92,.38);background:var(--panel);
-    box-shadow:0 0 0 5px rgba(7,6,12,.9),0 26px 70px rgba(0,0,0,.55);
+    position:relative;border:1px solid rgba(255,180,92,.4);background:var(--panel);
+    box-shadow:0 0 0 6px rgba(7,6,12,.65),0 30px 90px rgba(0,0,0,.62),0 0 90px rgba(255,180,92,.06);
   }
-  .console-bar{
-    display:flex;align-items:center;gap:12px;padding:9px 14px;
-    border-bottom:1px solid rgba(255,180,92,.22);
-    background:linear-gradient(90deg,rgba(255,180,92,.1),transparent);
-    font:700 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:#e9c9a8;
-  }
-  .console-bar .spacer{flex:1}
-  .fs-btn{
-    border:1px solid var(--line);background:transparent;color:var(--bone);
-    font:700 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
-    padding:7px 10px;cursor:pointer;
-  }
+  .console::before,.console::after{content:"";position:absolute;width:15px;height:15px;border:2px solid var(--amber);pointer-events:none;z-index:4}
+  .console::before{top:-2px;left:-2px;border-right:0;border-bottom:0}
+  .console::after{bottom:-2px;right:-2px;border-left:0;border-top:0}
+  .console-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid rgba(255,180,92,.2);background:linear-gradient(90deg,rgba(255,180,92,.08),transparent 65%);font:700 9.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:#e9c9a8;flex-wrap:wrap}
+  .dots{display:flex;gap:4px;flex:0 0 auto}
+  .dots i{width:6px;height:6px;display:block;background:var(--rust)}
+  .dots i:nth-child(2){background:var(--amber)}
+  .dots i:nth-child(3){background:var(--teal)}
+  .console-title{white-space:nowrap}
+  .spacer{flex:1}
+  .status{display:inline-flex;align-items:center;gap:6px;color:var(--dim);white-space:nowrap}
+  .status-led{width:6px;height:6px;background:var(--amber);animation:blink 1.2s steps(2,end) infinite}
+  @keyframes blink{50%{opacity:.2}}
+  .status.ok{color:var(--teal)}
+  .status.ok .status-led{background:var(--teal);animation:none;box-shadow:0 0 8px var(--teal)}
+  .console-spec{color:#8e7f8c;white-space:nowrap}
+  .fs-btn{border:1px solid var(--line);background:transparent;color:var(--bone);font:700 9.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:7px 10px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
   .fs-btn:hover{border-color:var(--amber);color:var(--amber)}
   .screen{position:relative;aspect-ratio:16/9;background:#07060c;overflow:hidden}
   .screen iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:#07060c}
-  .demo-hint{
-    padding:11px 14px;border-top:1px solid rgba(255,180,92,.22);
-    color:#c9b8ae;font:500 12px/1.6 var(--mono);
+  .screen::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:2;background:repeating-linear-gradient(0deg,rgba(0,0,0,.3) 0 1px,transparent 1px 3px);opacity:.13}
+  .console.is-live .screen{animation:power .72s cubic-bezier(.2,.75,.2,1) both}
+  @keyframes power{
+    0%{clip-path:inset(49.6% 0 49.6% 0);filter:brightness(2.6)}
+    55%{clip-path:inset(0 0 0 0);filter:brightness(1.28)}
+    100%{clip-path:inset(0 0 0 0);filter:brightness(1)}
   }
-  kbd{
-    display:inline-block;font:700 11px/1 var(--mono);
-    border:1px solid rgba(242,230,208,.4);border-bottom-width:2px;
-    padding:4px 6px;color:var(--bone);background:rgba(242,230,208,.06);
-  }
-
+  .demo-hint{padding:12px 14px;border-top:1px solid rgba(255,180,92,.2);color:#c9b8ae;font:500 11.5px/1.7 var(--mono)}
+  kbd{display:inline-block;font:700 10px/1 var(--mono);border:1px solid rgba(242,230,208,.4);border-bottom-width:2px;padding:4px 6px;color:var(--bone);background:rgba(242,230,208,.06);margin:0 1px}
   .hint-touch{display:none}
   @media(pointer:coarse){.hint-keys{display:none}.hint-touch{display:inline}}
 
-  footer{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--dim);font:500 12px/1.8 var(--mono)}
-  .foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:30px 0 42px;background:#06050b;color:var(--dim);font:500 12px/1.8 var(--mono)}
+  .foot{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:center}
+  .foot-brand{display:flex;gap:12px;align-items:center}
+  .foot-mark{display:grid;place-items:center;width:34px;height:34px;border:1px solid rgba(255,180,92,.4);color:var(--amber);font-weight:800;letter-spacing:.05em;flex:0 0 auto}
+  .foot-brand strong{display:block;color:var(--bone);letter-spacing:.14em;font-size:11px}
+  .foot-brand span{display:block;font-size:10.5px;color:var(--dim)}
+  .foot-links{display:flex;gap:18px;flex-wrap:wrap}
   footer a{color:var(--amber);text-decoration:none}
   footer a:hover{text-decoration:underline}
+  .foot-fine{margin-top:22px;padding-top:16px;border-top:1px solid rgba(242,230,208,.08);font-size:10px;letter-spacing:.08em;color:#6f6478}
 
-  @media(max-width:760px){
-    .hero{padding:46px 0 28px}
-    .features{grid-template-columns:repeat(2,1fr);gap:10px}
-    .console-bar .spacer{display:none}
-    .sky{padding-bottom:78px}
-    .skyline{height:96px}
+  /* reveal */
+  .js .reveal{opacity:0;transition:opacity .65s ease var(--d,0s)}
+  .js .reveal.in{opacity:1}
+  .js .rise{opacity:0;transform:translateY(18px);transition:opacity .6s ease var(--d,0s),transform .7s cubic-bezier(.2,.7,.2,1) var(--d,0s)}
+  .js .rise.in{opacity:1;transform:none}
+
+  @media(max-width:980px){
+    .hero-inner{grid-template-columns:1fr;gap:0;padding:118px 0 112px}
+    .hero-rail{display:none}
+    .features{grid-template-columns:repeat(2,1fr)}
   }
-  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+  @media(max-width:640px){
+    .topbar-links{gap:16px}
+    .topbar-links .nav-briefing{display:none}
+    .hero-inner{padding:104px 0 96px}
+    h1{font-size:clamp(52px,17vw,84px)}
+    .lead{font-size:15px}
+    .features{grid-template-columns:1fr;gap:10px}
+    .feature{padding:16px}
+    .section-head{gap:14px}
+    .section-note{max-width:none}
+    .console-bar .console-title{display:none}
+    .console-spec{display:none}
+    .demo-hint{font-size:11px}
+    .scroll-cue{bottom:14px}
+    .foot-links{gap:14px}
+  }
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    .js .reveal,.js .rise{opacity:1;transform:none;transition:none}
+    .ticker-track{animation:none}
+    .live-dot,.status-led,.scroll-cue i{animation:none}
+    .caret{display:none}
+    .console.is-live .screen{animation:none}
+    .btn,.feature{transition:none}
+  }
 </style>
 </head>
-<body>
+<body id="top">
+<a class="skip" href="#demo">데모로 건너뛰기</a>
+<div class="progress" aria-hidden="true"></div>
 
-<header class="sky">
-  <div class="skyline"></div>
-  <div class="wrap">
-    <div class="hero">
-      <div class="kicker">Pixel patrol / endless wave</div>
-      <h1>DUSK<br>PATROL</h1>
+<nav class="topbar" aria-label="주요 섹션">
+  <div class="topbar-inner">
+    <a class="wordmark" href="#top"><i aria-hidden="true"></i>DUSK PATROL</a>
+    <div class="topbar-links">
+      <a class="nav-briefing" href="#briefing">브리핑</a>
+      <a href="#demo">데모</a>
+      <a class="ext" href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero-shell" id="hero">
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <div class="hero-shade" aria-hidden="true"></div>
+  <div class="hero-scan" aria-hidden="true"></div>
+  <div class="wrap hero-inner">
+    <div class="hero-copy">
+      <div class="kicker"><span class="live-dot" aria-hidden="true"></span><span id="kicker-text">PIXEL PATROL / ENDLESS WAVE</span><span class="caret" aria-hidden="true"></span></div>
+      <h1 aria-label="DUSK PATROL"><span>DUSK</span><span>PATROL</span></h1>
       <p class="lead">적 부대를 지우고, 강화를 골라, 더 높은 웨이브로 올라가세요. 5웨이브마다 항공모함 보스가 기다립니다. PC는 키보드, 휴대폰은 터치로 바로 플레이.</p>
       <div class="actions">
-        <a class="btn" href="#demo">게임 바로 플레이 <span aria-hidden="true">↓</span></a>
+        <a class="btn js-play" href="#demo">게임 바로 플레이 <span aria-hidden="true">▶</span></a>
         <a class="btn ghost" href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">소스 코드 ↗</a>
       </div>
+      <ul class="hero-tags" aria-label="기술 정보">
+        <li>WEBGL2</li>
+        <li>480 × 270</li>
+        <li>NO INSTALL</li>
+        <li>∞ WAVES</li>
+      </ul>
     </div>
-    <div class="features">
-      <div class="feature"><div class="idx">01 / CAMPAIGN</div><h2>무한 웨이브</h2><p>끝없이 밀려오는 드론·인터셉터·건십. 웨이브를 비우면 보너스 점수와 강화 카드를 받습니다.</p></div>
-      <div class="feature"><div class="idx">02 / BOSS</div><h2>항모 보스</h2><p>5웨이브마다 호위기를 이끈 항공모함이 등장합니다. 피탄량이 줄면 탄막과 드론 투입이 거세집니다.</p></div>
-      <div class="feature"><div class="idx">03 / COMBAT</div><h2>4종 무기</h2><p>열 관리 기관포, 락온 미사일, 유도탄을 끊는 플레어, 무적으로 회피하는 배럴 롤.</p></div>
-      <div class="feature"><div class="idx">04 / BUILD</div><h2>강화 &amp; 등급</h2><p>11종 강화 중 매 웨이브 1개를 선택. 선체·실드·콤보·명중률로 S~D 등급을 받습니다.</p></div>
-    </div>
+    <aside class="hero-rail" aria-hidden="true">
+      <div class="rail-item"><span>ALT</span><strong id="rail-alt">0420</strong></div>
+      <div class="rail-item"><span>SPD</span><strong id="rail-spd">620</strong></div>
+      <div class="rail-item"><span>WAVE</span><strong>∞</strong></div>
+      <div class="rail-line"></div>
+    </aside>
   </div>
+  <a class="scroll-cue" href="#briefing"><span>SCROLL</span><i aria-hidden="true"></i></a>
 </header>
 
-<main>
-  <div class="wrap demo-block" id="demo">
-    <div class="demo-head">
-      <div class="section-label"><span class="live-dot"></span> Live demo</div>
-      <button class="fs-btn" id="fullscreen" type="button">전체 화면 ⛶</button>
+<div class="ticker" aria-hidden="true">
+  <div class="ticker-track">
+    <div class="ticker-set">
+      <span>Wave 01 — drones inbound</span>
+      <span>Carrier signature detected</span>
+      <span>Flares ready</span>
+      <span>S-rank run in progress</span>
+      <span>Missiles armed</span>
+      <span>Stay on the deck</span>
     </div>
-    <div class="console" id="console">
-      <div class="console-bar">
-        <span>dusk_patrol — endless wave campaign</span>
-        <span class="spacer"></span>
-        <span>WebGL2 · 480×270</span>
-      </div>
-      <div class="screen">
-        <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 무한 웨이브 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
-      </div>
-      <div class="demo-hint">
-        <span class="hint-keys">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>WASD</kbd> 비행 · <kbd>Space</kbd> 기관포 · <kbd>F</kbd> 미사일 · <kbd>X</kbd> 플레어 · <kbd>B</kbd> 롤 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 강화 선택</span>
-        <span class="hint-touch">화면을 탭해 시작 · 왼쪽 절반을 드래그해 조종 · <kbd>FIRE</kbd> 기관포 · <kbd>MSL</kbd> 미사일 · <kbd>FLR</kbd> 플레어 · <kbd>ROLL</kbd> 회피 · 전체 화면이나 가로 화면이 편합니다</span>
-      </div>
+    <div class="ticker-set">
+      <span>Wave 01 — drones inbound</span>
+      <span>Carrier signature detected</span>
+      <span>Flares ready</span>
+      <span>S-rank run in progress</span>
+      <span>Missiles armed</span>
+      <span>Stay on the deck</span>
     </div>
   </div>
+</div>
 
+<main>
+  <section class="briefing" id="briefing">
+    <div class="wrap">
+      <div class="section-head rise">
+        <div>
+          <div class="section-label">02 / Mission briefing</div>
+          <h2 class="section-title">한 번 뜨면, 계속 오릅니다</h2>
+        </div>
+        <p class="section-note">짧은 한 판으로 끝나지 않습니다. 웨이브가 오를수록 적은 거세지고, 매 웨이브 강화 카드가 빌드를 바꿉니다.</p>
+      </div>
+      <div class="features">
+        <article class="feature reveal" style="--d:.02s">
+          <div class="feature-top">
+            <span class="idx">01 / CAMPAIGN</span>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><rect x="2" y="6" width="20" height="2"/><rect x="6" y="11" width="16" height="2"/><rect x="2" y="16" width="12" height="2"/><rect x="16" y="16" width="6" height="2"/></svg>
+          </div>
+          <h3>무한 웨이브</h3>
+          <p>끝없이 밀려오는 드론·인터셉터·건십. 웨이브를 비우면 보너스 점수와 강화 카드를 받습니다.</p>
+        </article>
+        <article class="feature reveal" style="--d:.08s">
+          <div class="feature-top">
+            <span class="idx">02 / BOSS</span>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><rect x="2" y="14" width="20" height="3"/><rect x="4" y="11" width="14" height="3"/><rect x="16" y="8" width="4" height="3"/><rect x="18" y="5" width="1" height="3"/><rect x="8" y="8" width="2" height="3"/></svg>
+          </div>
+          <h3>항모 보스</h3>
+          <p>5웨이브마다 호위기를 이끈 항공모함이 등장합니다. 피탄량이 줄면 탄막과 드론 투입이 거세집니다.</p>
+        </article>
+        <article class="feature reveal" style="--d:.14s">
+          <div class="feature-top">
+            <span class="idx">03 / COMBAT</span>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="2" width="4" height="6"/><rect x="10" y="16" width="4" height="6"/><rect x="2" y="10" width="6" height="4"/><rect x="16" y="10" width="6" height="4"/><rect x="11" y="11" width="2" height="2"/></svg>
+          </div>
+          <h3>4종 무기</h3>
+          <p>열 관리 기관포, 락온 미사일, 유도탄을 끊는 플레어, 무적으로 회피하는 배럴 롤.</p>
+        </article>
+        <article class="feature reveal" style="--d:.20s">
+          <div class="feature-top">
+            <span class="idx">04 / BUILD</span>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><rect x="4" y="6" width="10" height="14" opacity=".4"/><rect x="10" y="2" width="10" height="14"/><rect x="12" y="5" width="6" height="1" fill="#12101d"/><rect x="12" y="8" width="4" height="1" fill="#12101d"/></svg>
+          </div>
+          <h3>강화 &amp; 등급</h3>
+          <p>11종 강화 중 매 웨이브 1개를 선택. 선체·실드·콤보·명중률로 S~D 등급을 받습니다.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="demo-block" id="demo">
+    <div class="wrap">
+      <div class="section-head rise">
+        <div>
+          <div class="section-label">03 / Live demo</div>
+          <h2 class="section-title">지금 바로 출격</h2>
+        </div>
+        <p class="section-note">설치 없이 브라우저에서. 아래 화면을 클릭한 뒤 <kbd>Enter</kbd>를 누르면 시작합니다.</p>
+      </div>
+      <div class="console rise" id="console">
+        <div class="console-bar">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="console-title">dusk_patrol — endless wave campaign</span>
+          <span class="spacer"></span>
+          <span class="status" id="link-status"><span class="status-led" aria-hidden="true"></span>LINKING</span>
+          <span class="console-spec">WEBGL2 · 480×270</span>
+          <a class="fs-btn" href="game/index.html" target="_blank" rel="noopener">새 창 ↗</a>
+          <button class="fs-btn" id="fullscreen" type="button">전체 화면 ⛶</button>
+        </div>
+        <div class="screen">
+          <iframe id="game" src="game/index.html" title="DUSK PATROL 라이브 데모 — 브라우저에서 바로 플레이하는 무한 웨이브 전투기 게임" allow="fullscreen" allowfullscreen></iframe>
+        </div>
+        <div class="demo-hint">
+          <span class="hint-keys">화면을 클릭한 뒤 <kbd>Enter</kbd> 시작 · <kbd>WASD</kbd> 비행 · <kbd>Space</kbd> 기관포 · <kbd>F</kbd> 미사일 · <kbd>X</kbd> 플레어 · <kbd>B</kbd> 롤 · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 강화 선택</span>
+          <span class="hint-touch">화면을 탭해 시작 · 왼쪽 절반을 드래그해 조종 · <kbd>FIRE</kbd> 기관포 · <kbd>MSL</kbd> 미사일 · <kbd>FLR</kbd> 플레어 · <kbd>ROLL</kbd> 회피 · 전체 화면이나 가로 화면이 편합니다</span>
+        </div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer>
   <div class="wrap foot">
-    <span>DUSK PATROL</span>
-    <span><a href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">GitHub</a> · <a href="#demo">데모로 ↑</a></span>
+    <div class="foot-brand">
+      <span class="foot-mark" aria-hidden="true">DP</span>
+      <div><strong>DUSK PATROL</strong><span>절차적 픽셀 플라이트 액션 · WebGL2 · 외부 에셋 없음</span></div>
+    </div>
+    <div class="foot-links">
+      <a href="#briefing">브리핑</a>
+      <a href="#demo">데모</a>
+      <a href="https://github.com/jeiel85/dusk-patrol" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="#top">TOP ↑</a>
+    </div>
   </div>
+  <div class="wrap foot-fine">© 2026 DUSK PATROL · Built for the browser. No installs, no external assets.</div>
 </footer>
 
 <script>
-  document.getElementById('fullscreen').addEventListener('click', function () {
-    const box = document.getElementById('console');
-    if (document.fullscreenElement) { document.exitFullscreen(); return; }
-    if (box.requestFullscreen) box.requestFullscreen();
-    document.getElementById('game').focus();
+(function () {
+  'use strict';
+
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine = window.matchMedia('(pointer: fine)').matches;
+
+  /* ---------- scroll progress + sticky nav ---------- */
+  var progress = document.querySelector('.progress');
+  var topbar = document.querySelector('.topbar');
+  function onScroll() {
+    var doc = document.documentElement;
+    var max = doc.scrollHeight - doc.clientHeight;
+    var p = max > 0 ? Math.min(1, doc.scrollTop / max) : 0;
+    progress.style.transform = 'scaleX(' + p + ')';
+    topbar.classList.toggle('stuck', doc.scrollTop > 24);
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  onScroll();
+
+  /* ---------- reveal on scroll ---------- */
+  var revealEls = document.querySelectorAll('.reveal, .rise');
+  if (reduce || !('IntersectionObserver' in window)) {
+    revealEls.forEach(function (el) { el.classList.add('in'); });
+  } else {
+    var revealIO = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          revealIO.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.14, rootMargin: '0px 0px -6% 0px' });
+    revealEls.forEach(function (el) { revealIO.observe(el); });
+  }
+
+  /* ---------- kicker typing ---------- */
+  var kicker = document.getElementById('kicker-text');
+  var kickerText = 'PIXEL PATROL / ENDLESS WAVE';
+  if (kicker && !reduce) {
+    kicker.textContent = '';
+    var typed = 0;
+    var type = function () {
+      typed += 1;
+      kicker.textContent = kickerText.slice(0, typed);
+      if (typed < kickerText.length) window.setTimeout(type, 26 + Math.random() * 30);
+    };
+    window.setTimeout(type, 320);
+  }
+
+  /* ---------- hero telemetry ---------- */
+  var railAlt = document.getElementById('rail-alt');
+  var railSpd = document.getElementById('rail-spd');
+  if (railAlt && railSpd && !reduce) {
+    window.setInterval(function () {
+      railAlt.textContent = String(408 + Math.floor(Math.random() * 44)).padStart(4, '0');
+      railSpd.textContent = String(598 + Math.floor(Math.random() * 52));
+    }, 1100);
+  }
+
+  /* ---------- feature tilt + spotlight ---------- */
+  if (fine && !reduce) {
+    document.querySelectorAll('.feature').forEach(function (card) {
+      var lx = 0.5, ly = 0.5, queued = 0;
+      var apply = function () {
+        queued = 0;
+        card.style.transform = 'perspective(760px) rotateX(' + ((0.5 - ly) * 5).toFixed(2) + 'deg) rotateY(' + ((lx - 0.5) * 5).toFixed(2) + 'deg) translateY(-3px)';
+      };
+      card.addEventListener('pointermove', function (e) {
+        var r = card.getBoundingClientRect();
+        lx = (e.clientX - r.left) / r.width;
+        ly = (e.clientY - r.top) / r.height;
+        card.style.setProperty('--mx', (lx * 100).toFixed(1) + '%');
+        card.style.setProperty('--my', (ly * 100).toFixed(1) + '%');
+        if (!queued) queued = requestAnimationFrame(apply);
+      });
+      card.addEventListener('pointerleave', function () {
+        if (queued) { cancelAnimationFrame(queued); queued = 0; }
+        card.style.transform = '';
+      });
+    });
+  }
+
+  /* ---------- console: fullscreen, status, CRT ---------- */
+  var consoleBox = document.getElementById('console');
+  var fsBtn = document.getElementById('fullscreen');
+  var gameFrame = document.getElementById('game');
+  var linkStatus = document.getElementById('link-status');
+
+  if (gameFrame && linkStatus) {
+    var markLink = function () {
+      linkStatus.classList.add('ok');
+      linkStatus.innerHTML = '<span class="status-led" aria-hidden="true"></span>LINK STABLE';
+    };
+    gameFrame.addEventListener('load', markLink);
+    try {
+      var frameDoc = gameFrame.contentDocument;
+      if (frameDoc && frameDoc.readyState === 'complete' && frameDoc.querySelector('canvas')) markLink();
+    } catch (err) { /* cross-origin frame: the load event still reports status */ }
+  }
+
+  if (fsBtn && consoleBox) {
+    fsBtn.addEventListener('click', function () {
+      var done = function () { if (gameFrame) gameFrame.focus({ preventScroll: true }); };
+      var fail = function () { window.open('game/index.html', '_blank', 'noopener'); };
+      if (document.fullscreenElement) {
+        var exit = document.exitFullscreen();
+        if (exit && exit.then) exit.then(done).catch(done); else done();
+      } else if (consoleBox.requestFullscreen) {
+        var req = consoleBox.requestFullscreen();
+        if (req && req.then) req.then(done).catch(fail); else done();
+      } else {
+        fail();
+      }
+    });
+    document.addEventListener('fullscreenchange', function () {
+      fsBtn.textContent = document.fullscreenElement ? '나가기 ✕' : '전체 화면 ⛶';
+    });
+  }
+
+  document.querySelectorAll('.js-play').forEach(function (a) {
+    a.addEventListener('click', function () {
+      window.setTimeout(function () {
+        if (gameFrame) gameFrame.focus({ preventScroll: true });
+      }, 650);
+    });
   });
+
+  if (consoleBox && !reduce && 'IntersectionObserver' in window) {
+    var consoleIO = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          consoleBox.classList.add('is-live');
+          consoleIO.disconnect();
+        }
+      });
+    }, { threshold: 0.22 });
+    consoleIO.observe(consoleBox);
+  }
+
+  /* ---------- pixel dusk sky ---------- */
+  var hero = document.getElementById('hero');
+  var canvas = document.getElementById('sky');
+  var ctx = canvas ? canvas.getContext('2d', { alpha: false }) : null;
+  if (!hero || !ctx) return;
+
+  var cw = 480, ch = 300;
+  var scene = null;
+  var running = false, raf = 0, last = 0, time = 0;
+  var heroVisible = true;
+  var parX = 0, parY = 0, targetX = 0, targetY = 0;
+  var embers = [];
+
+  function rng(seed) {
+    return function () {
+      seed |= 0;
+      seed = seed + 0x6D2B79F5 | 0;
+      var x = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x;
+      return ((x ^ x >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function buildScene() {
+    var r = rng(1337);
+    var stars = [];
+    var starCount = Math.round(cw * ch / 5200);
+    for (var i = 0; i < starCount; i++) {
+      stars.push({
+        x: Math.floor(r() * cw),
+        y: Math.floor(r() * ch * 0.6),
+        p: r() * 6.2832,
+        s: 0.6 + r() * 1.8,
+        teal: r() > 0.86
+      });
+    }
+
+    var clouds = [];
+    for (var c = 0; c < 6; c++) {
+      var baseW = 22 + Math.floor(r() * 34);
+      var rects = [
+        [0, 0, baseW, 4],
+        [Math.floor(baseW * 0.1), -3, Math.floor(baseW * 0.8), 3],
+        [Math.floor(baseW * 0.24), -6, Math.floor(baseW * 0.52), 3],
+        [Math.floor(baseW * 0.4), -8, Math.floor(baseW * 0.24), 2],
+        [Math.floor(baseW * 0.04), -2, Math.floor(baseW * 0.2), 2],
+        [Math.floor(baseW * 0.72), -4, Math.floor(baseW * 0.18), 2]
+      ];
+      var cloudW = 0;
+      for (var ci = 0; ci < rects.length; ci++) cloudW = Math.max(cloudW, rects[ci][0] + rects[ci][2]);
+      clouds.push({
+        x: r() * cw,
+        y: Math.floor(ch * (0.16 + r() * 0.4)),
+        sp: 1.2 + r() * 2.6,
+        a: 0.48 + r() * 0.14,
+        w: cloudW,
+        top: -8,
+        bottom: 4,
+        rects: rects
+      });
+    }
+
+    var layers = [];
+    var defs = [
+      { col: '#2c1a40', win: '255,198,142', hMin: 0.14, hMax: 0.28, par: 4, alpha: 0.5 },
+      { col: '#1b1129', win: '255,184,120', hMin: 0.22, hMax: 0.4, par: 9, alpha: 0.66 },
+      { col: '#0a0713', win: '255,198,142', hMin: 0.28, hMax: 0.54, par: 16, alpha: 0.85 }
+    ];
+    defs.forEach(function (def) {
+      var buildings = [];
+      var x = -24;
+      while (x < cw + 24) {
+        var w = 6 + Math.floor(r() * 14);
+        var h = Math.floor(ch * (def.hMin + r() * (def.hMax - def.hMin)));
+        var wins = [];
+        for (var wy = 5; wy < h - 4; wy += 5) {
+          for (var wx = 2; wx < w - 2; wx += 3) {
+            if (r() > 0.72) wins.push([wx, wy, r() * 6.2832, r() > 0.93]);
+          }
+        }
+        buildings.push({ x: x, w: w, h: h, wins: wins });
+        x += w + 1 + Math.floor(r() * 3);
+      }
+      layers.push({ col: def.col, win: def.win, par: def.par, alpha: def.alpha, buildings: buildings });
+    });
+
+    var grad = ctx.createLinearGradient(0, 0, 0, ch);
+    grad.addColorStop(0, '#0a0716');
+    grad.addColorStop(0.34, '#221232');
+    grad.addColorStop(0.56, '#4a2745');
+    grad.addColorStop(0.74, '#8c4a4a');
+    grad.addColorStop(0.88, '#c97050');
+    grad.addColorStop(1, '#ef9d5c');
+
+    scene = {
+      grad: grad,
+      stars: stars,
+      clouds: clouds,
+      layers: layers,
+      sun: { x: cw * 0.68, y: ch * 0.54, r: cw * 0.105 },
+      jet: { active: false, next: 9, start: 0 }
+    };
+  }
+
+  function draw(dt) {
+    if (!scene) return;
+    var i, j, k;
+
+    ctx.fillStyle = scene.grad;
+    ctx.fillRect(0, 0, cw, ch);
+
+    /* stars */
+    for (i = 0; i < scene.stars.length; i++) {
+      var s = scene.stars[i];
+      var tw = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(time * s.s + s.p));
+      ctx.globalAlpha = tw * (1 - s.y / (ch * 0.85));
+      ctx.fillStyle = s.teal ? '#9ff5e7' : '#f6e9d2';
+      ctx.fillRect(s.x, s.y, 1, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    /* sun */
+    var sun = scene.sun;
+    var sx = sun.x + parX * 2.5;
+    var sy = sun.y + parY * 1.5;
+    var glow = ctx.createRadialGradient(sx, sy, sun.r * 0.7, sx, sy, sun.r * 2.9);
+    glow.addColorStop(0, 'rgba(255,216,164,0.26)');
+    glow.addColorStop(0.45, 'rgba(255,190,130,0.10)');
+    glow.addColorStop(1, 'rgba(255,170,110,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sx - sun.r * 2.9, sy - sun.r * 2.9, sun.r * 5.8, sun.r * 5.8);
+    ctx.fillStyle = '#ffd9a4';
+    ctx.beginPath();
+    ctx.arc(sx, sy, sun.r, 0, 6.2832);
+    ctx.fill();
+    ctx.fillStyle = '#fff0cf';
+    ctx.beginPath();
+    ctx.arc(sx - sun.r * 0.14, sy - sun.r * 0.12, sun.r * 0.72, 0, 6.2832);
+    ctx.fill();
+
+    /* clouds */
+    for (i = 0; i < scene.clouds.length; i++) {
+      var c = scene.clouds[i];
+      var span = cw + c.w + 80;
+      var x = ((c.x + time * c.sp + parX * (c.sp * 1.6)) % span + span) % span - c.w - 40;
+      var y = c.y + parY * 2;
+      var cg = ctx.createLinearGradient(0, y + c.top, 0, y + c.bottom);
+      cg.addColorStop(0, '#fff3e4');
+      cg.addColorStop(0.55, '#ffddc9');
+      cg.addColorStop(1, '#e7b3ad');
+      ctx.globalAlpha = c.a;
+      ctx.fillStyle = cg;
+      for (j = 0; j < c.rects.length; j++) {
+        var q = c.rects[j];
+        ctx.fillRect(Math.round(x + q[0]), Math.round(y + q[1]), q[2], q[3]);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    /* skyline */
+    for (i = 0; i < scene.layers.length; i++) {
+      var layer = scene.layers[i];
+      var off = Math.round(parX * layer.par);
+      for (j = 0; j < layer.buildings.length; j++) {
+        var b = layer.buildings[j];
+        var bx = Math.round(b.x + off);
+        if (bx > cw + 24 || bx + b.w < -24) continue;
+        ctx.fillStyle = layer.col;
+        ctx.fillRect(bx, ch - b.h, b.w, b.h);
+        for (k = 0; k < b.wins.length; k++) {
+          var win = b.wins[k];
+          if (Math.sin(time * 1.4 + win[2]) < -0.55) continue;
+          ctx.globalAlpha = layer.alpha * (0.55 + 0.35 * Math.sin(time * 0.9 + win[2] * 2));
+          ctx.fillStyle = win[3] ? 'rgb(120,240,220)' : 'rgb(' + layer.win + ')';
+          ctx.fillRect(bx + win[0], ch - b.h + win[1], 1, 1);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    /* jet crossing */
+    var jet = scene.jet;
+    if (!reduce) {
+      if (jet.active) {
+        var jx = -12 + (time - jet.start) * 30;
+        var jy = Math.round(ch * 0.3 + Math.sin(time * 0.8) * 2);
+        if (jx > cw + 26) {
+          jet.active = false;
+          jet.next = time + 16 + Math.random() * 10;
+        } else {
+          ctx.fillStyle = '#ffd9c2';
+          for (j = 0; j < 34; j++) {
+            ctx.globalAlpha = (1 - j / 34) * 0.22;
+            ctx.fillRect(Math.round(jx - 7 - j), jy, 1, 1);
+          }
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#1a1226';
+          ctx.fillRect(Math.round(jx), jy, 6, 1);
+          ctx.fillRect(Math.round(jx + 2), jy - 1, 2, 1);
+          ctx.fillRect(Math.round(jx + 2), jy + 1, 2, 1);
+          ctx.fillRect(Math.round(jx - 1), jy - 1, 1, 1);
+          ctx.fillRect(Math.round(jx - 1), jy + 1, 1, 1);
+          if (Math.sin(time * 9) > 0) {
+            ctx.fillStyle = '#ff8a6a';
+            ctx.fillRect(Math.round(jx + 5), jy - 2, 1, 1);
+          }
+        }
+      } else if (time > jet.next) {
+        jet.active = true;
+        jet.start = time;
+      }
+    }
+
+    /* pointer embers */
+    for (i = embers.length - 1; i >= 0; i--) {
+      var p = embers[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.012;
+      p.life -= dt;
+      if (p.life <= 0) {
+        embers.splice(i, 1);
+        continue;
+      }
+      ctx.globalAlpha = Math.min(1, p.life * 1.8) * 0.85;
+      ctx.fillStyle = p.c;
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(now) {
+    if (!running) return;
+    var dt = Math.min(0.05, (now - last) / 1000 || 0.016);
+    last = now;
+    time += dt;
+    var ease = Math.min(1, dt * 4.5);
+    parX += (targetX - parX) * ease;
+    parY += (targetY - parY) * ease;
+    hero.style.setProperty('--px', parX.toFixed(3));
+    hero.style.setProperty('--py', parY.toFixed(3));
+    draw(dt);
+    raf = requestAnimationFrame(frame);
+  }
+
+  function start() {
+    if (running || reduce) return;
+    running = true;
+    last = performance.now();
+    raf = requestAnimationFrame(frame);
+  }
+  function stop() {
+    running = false;
+    cancelAnimationFrame(raf);
+  }
+
+  function resize() {
+    var rect = hero.getBoundingClientRect();
+    if (rect.width < 2) return;
+    cw = 480;
+    ch = Math.max(160, Math.round(cw * rect.height / rect.width));
+    canvas.width = cw;
+    canvas.height = ch;
+    buildScene();
+    if (!running) draw(0);
+  }
+
+  /* pointer parallax + sparks */
+  hero.addEventListener('pointermove', function (e) {
+    if (!fine) return;
+    var r = canvas.getBoundingClientRect();
+    var px = (e.clientX - r.left) / Math.max(1, r.width);
+    var py = (e.clientY - r.top) / Math.max(1, r.height);
+    targetX = (px - 0.5) * 2;
+    targetY = (py - 0.5) * 2;
+    if (reduce) return;
+    var cx = px * cw;
+    var cy = py * ch;
+    var n = embers.length < 80 ? 2 : 0;
+    for (var i = 0; i < n; i++) {
+      embers.push({
+        x: cx,
+        y: cy,
+        vx: (Math.random() - 0.5) * 0.35,
+        vy: -Math.random() * 0.35,
+        life: 0.5 + Math.random() * 0.6,
+        c: Math.random() > 0.7 ? '#5ee0d0' : '#ffb45c'
+      });
+    }
+  });
+  hero.addEventListener('pointerleave', function () {
+    targetX = 0;
+    targetY = 0;
+  });
+  hero.addEventListener('pointerdown', function (e) {
+    if (!fine || reduce || e.target.closest('a,button')) return;
+    var r = canvas.getBoundingClientRect();
+    var cx = (e.clientX - r.left) / Math.max(1, r.width) * cw;
+    var cy = (e.clientY - r.top) / Math.max(1, r.height) * ch;
+    for (var i = 0; i < 12 && embers.length < 100; i++) {
+      var a = Math.random() * 6.2832;
+      var sp = 0.15 + Math.random() * 0.5;
+      embers.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: 0.6 + Math.random() * 0.7,
+        c: Math.random() > 0.6 ? '#5ee0d0' : '#ffb45c'
+      });
+    }
+  });
+
+  /* start / pause */
+  if ('ResizeObserver' in window) {
+    var lastW = 0, lastH = 0;
+    new ResizeObserver(function (entries) {
+      var box = entries[0].contentRect;
+      if (Math.abs(box.width - lastW) < 2 && Math.abs(box.height - lastH) < 2) return;
+      lastW = box.width;
+      lastH = box.height;
+      resize();
+    }).observe(hero);
+  } else {
+    window.addEventListener('resize', resize);
+  }
+
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      heroVisible = entries[0].isIntersecting;
+      if (heroVisible && !document.hidden) start(); else stop();
+    }, { threshold: 0 }).observe(hero);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stop();
+    else if (heroVisible) start();
+  });
+
+  resize();
+  if (reduce) draw(0); else start();
+})();
 </script>
 </body>
 </html>
