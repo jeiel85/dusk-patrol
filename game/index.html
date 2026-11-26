@@ -1916,8 +1916,10 @@ function spawnPoint(dist) {
   const x = plane.pos[0] + Math.cos(a) * dist;
   const z = plane.pos[2] + Math.sin(a) * dist;
   const h = Math.max(terrainHeight(x, z), 0);
+  // The 430 cruise cap must never place a spawn inside a peak: keep 40 units
+  // of clearance above the local ground even when that exceeds the cap.
   return [clamp(x, -BOUNDARY + 400, BOUNDARY - 400),
-    clamp(h + 90 + Math.random() * 150, 90, 430),
+    Math.max(clamp(h + 90 + Math.random() * 150, 90, 430), h + 40),
     clamp(z, -BOUNDARY + 400, BOUNDARY - 400)];
 }
 
@@ -2025,7 +2027,9 @@ function moveEnemy(e, dt) {
   e.pos = vadd(e.pos, vmul(e.vel, dt));
   const gh = Math.max(terrainHeight(e.pos[0], e.pos[2]), 0);
   if (e.pos[1] < gh + 26) { e.pos[1] = gh + 26; if (e.vel[1] < 0) e.vel[1] = 0; }
-  if (e.pos[1] > 520) { e.pos[1] = 520; if (e.vel[1] > 0) e.vel[1] = 0; }
+  // The cruise ceiling yields to terrain so enemies stay visible above peaks.
+  const ceil = Math.max(520, gh + 26);
+  if (e.pos[1] > ceil) { e.pos[1] = ceil; if (e.vel[1] > 0) e.vel[1] = 0; }
   const lim = BOUNDARY - 260;
   e.pos[0] = clamp(e.pos[0], -lim, lim);
   e.pos[2] = clamp(e.pos[2], -lim, lim);
