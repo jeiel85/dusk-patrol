@@ -106,7 +106,7 @@ function drawShadows() {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthMask(false);
 
-  // Projected cloud shadows on sea / coastal plains.
+  // Projected cloud shadows on land.
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudShadowVao);
   gl.uniform1f(U(shadowProg, 'uUseTex'), 1.0);
@@ -120,6 +120,7 @@ function drawShadows() {
     const rad = c.sx * 0.92, rz = c.sy * 1.45;
     const gh = terrainHeight(sx, sz);
     if (gh < 2) continue; // keep the sea clean: no hard-edged cloud shadows on water
+    if (gh > c.y - 30) continue; // a cloud cannot shadow ground above it
     const sy = gh + 0.55;
     if (!sphereInFrustum(sx, sy, sz, Math.max(rad, rz))) continue;
     const dist = Math.hypot(dx, sy - cam.pos[1], dz);
