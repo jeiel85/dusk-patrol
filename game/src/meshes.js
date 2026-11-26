@@ -21,7 +21,7 @@ attr(0, 2);
 gl.bindVertexArray(null);
 
 /* ---------- terrain ---------- */
-const TN = 160, TSTEP = WORLD / TN;
+const TN = 320, TSTEP = WORLD / TN;
 const th = new Float32Array((TN + 1) * (TN + 1));
 for (let j = 0; j <= TN; j++) {
   const z = -HALF + j * TSTEP;
@@ -90,18 +90,20 @@ const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 function makeCloudTexture(seed) {
   const S = 64, r = mulberry32(seed);
   const blobs = [];
-  const nb = 5 + ((r() * 4) | 0);
-  for (let i = 0; i < nb; i++) blobs.push([0.18 + r() * 0.64, 0.30 + r() * 0.42, 0.12 + r() * 0.17]);
+  const nb = 4 + ((r() * 3) | 0);
+  for (let i = 0; i < nb; i++) blobs.push([0.16 + r() * 0.68, 0.40 + r() * 0.18, 0.18 + r() * 0.21]);
   return spriteTex(S, (x, y) => {
     const nx = x / S, ny = y / S;
     let f = 0;
     for (const b of blobs) {
-      const dx = (nx - b[0]) * 1.40, dy = (ny - b[1]) * 2.05;
+      const dx = (nx - b[0]) * 1.10, dy = (ny - b[1]) * 1.50;
       f = Math.max(f, 1 - Math.sqrt(dx * dx + dy * dy) / b[2]);
     }
-    f += (fbm(nx * 6 + seed, ny * 6) - 0.5) * 0.4;
+    f += (fbm(nx * 7 + seed, ny * 5) - 0.5) * 0.30;
+    // Flatten the underside so banks read as fair-weather cumulus.
+    f -= smoothstep(0.54, 0.84, ny) * 0.18;
     const b = (BAYER4[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
-    return f > 0.30 || (f > 0.255 && b > 0) ? 1 : 0;
+    return f > 0.17 || (f > 0.12 && b > 0) ? 1 : 0;
   });
 }
 const cloudTexes = [makeCloudTexture(11), makeCloudTexture(29), makeCloudTexture(53), makeCloudTexture(97)];
@@ -175,10 +177,10 @@ attr(5, 3, 40, 28, 1); // wall colour
 gl.bindVertexArray(null);
 
 /* ---------- jet ---------- */
-const JET_LIGHT = rgb('#aebad4'), JET_MID = rgb('#5b6884'), JET_DARK = rgb('#2b3246');
-const JET_WING = rgb('#3f4a64'), JET_WING_BOT = rgb('#252c3e'), JET_EDGE = rgb('#d6e0f2');
-const JET_FIN = rgb('#2f374d'), JET_CANOPY = rgb('#1b3254'), JET_CANOPY_HI = rgb('#79c2e8');
-const JET_ORANGE = rgb('#ff5b2e'), JET_GOLD = rgb('#ff9b42');
+const JET_LIGHT = rgb('#e9e6e0'), JET_MID = rgb('#b7b8bc'), JET_DARK = rgb('#6b6e76');
+const JET_WING = rgb('#a7a8ac'), JET_WING_BOT = rgb('#6a6a72'), JET_EDGE = rgb('#f6f3ec');
+const JET_FIN = rgb('#7c7f88'), JET_CANOPY = rgb('#26344e'), JET_CANOPY_HI = rgb('#9fd6ee');
+const JET_ORANGE = rgb('#f2602f'), JET_GOLD = rgb('#ffa552');
 
 const jet = new MeshBuilder();
 function ringPts(z, rx, ry, y0) {
@@ -239,20 +241,9 @@ function buildWing(sign) {
     );
   }
   jet.quad(
-    [sign * 4.25, 0.08, 1.50], [sign * 4.25, 0.08, 2.15],
-    [sign * 4.95, 0.08, 2.15], [sign * 4.95, 0.08, 1.48],
+    [sign * 3.55, 0.08, 2.62], [sign * 4.95, 0.08, 2.15],
+    [sign * 4.95, 0.08, 1.45], [sign * 3.55, 0.08, 1.72],
     JET_ORANGE, [0, 1, 0]
-  );
-  // Bold squadron wing stripe so banking flashes vividly from Chase & Overhead views.
-  jet.quad(
-    [sign * 1.55, 0.08, -0.75], [sign * 2.35, 0.08, -0.25],
-    [sign * 3.85, 0.08, 2.18], [sign * 2.95, 0.08, 2.52],
-    JET_ORANGE, [0, 1, 0]
-  );
-  jet.quad(
-    [sign * 1.55, -0.24, -0.75], [sign * 2.95, -0.24, 2.52],
-    [sign * 3.85, -0.24, 2.18], [sign * 2.35, -0.24, -0.25],
-    JET_GOLD, [0, -1, 0]
   );
 }
 buildWing(1); buildWing(-1);
@@ -424,6 +415,21 @@ function makeDynamic(floats, layout) {
 const POINT_MAX = 900;
 const { vao: pointVao, vbo: pointVbo, data: pointData } =
   makeDynamic(POINT_MAX * 8, [[0, 3], [1, 3], [2, 1], [3, 1]]);
+// Static scenery points (trees & scrub) share the point shader but live in their own buffer.
+const SCENERY_COL_A = rgb('#39462a'), SCENERY_COL_B = rgb('#52422c');
+const sceneryData = new Float32Array(treePoints.length * 8);
+for (let i = 0; i < treePoints.length; i++) {
+  const t = treePoints[i], o = i * 8, pick = t[3];
+  const col = pick < 0.62 ? SCENERY_COL_A : (pick < 0.88 ? SCENERY_COL_B : rgb('#635a34'));
+  sceneryData[o] = t[0]; sceneryData[o + 1] = t[1]; sceneryData[o + 2] = t[2];
+  sceneryData[o + 3] = col[0]; sceneryData[o + 4] = col[1]; sceneryData[o + 5] = col[2];
+  sceneryData[o + 6] = 1.9 + pick * 1.4; sceneryData[o + 7] = pick;
+}
+const sceneryVao = gl.createVertexArray();
+gl.bindVertexArray(sceneryVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, buf(sceneryData));
+attr(0, 3, 32, 0); attr(1, 3, 32, 12); attr(2, 1, 32, 24); attr(3, 1, 32, 28);
+gl.bindVertexArray(null);
 // Particles: six billboard corners of centre3, corner2, rgba4, size.
 function makeParticleVAO(max) {
   return Object.assign(makeDynamic(max * 60, [[0, 3], [1, 2], [2, 4], [3, 1]]), { max });

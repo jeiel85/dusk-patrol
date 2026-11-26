@@ -7,6 +7,33 @@
 function pad(n, w) { return String(Math.max(0, Math.floor(n))).padStart(w, '0'); }
 function blinkOn(rate) { return Math.sin(game.time * rate) > -0.2; }
 
+/* ---------- chrome ---------- */
+// Flat top / bottom bars with a hairline accent, in the spirit of a modern flight HUD.
+function drawBarsTopBottom() {
+  hud.fillStyle = 'rgba(12,10,20,0.80)';
+  hud.fillRect(0, 0, W, 15);
+  hud.fillRect(0, H - 15, W, 15);
+  hud.fillStyle = 'rgba(255,180,92,0.22)';
+  hud.fillRect(0, 15, W, 1);
+  hud.fillRect(0, H - 16, W, 1);
+}
+function drawChip(x, y, label, color, align) {
+  const w = textWidth(label, 1, 1) + 10;
+  const bx = align === 'right' ? x - w : x;
+  hud.fillStyle = 'rgba(12,10,20,0.62)';
+  hud.fillRect(bx, y, w, 11);
+  hud.fillStyle = 'rgba(255,180,92,0.26)';
+  hud.fillRect(bx, y, w, 1);
+  drawText(label, bx + 5, y + 2, color, 1, 1);
+  return bx;
+}
+function drawMiniBar(x, y, w, frac, col) {
+  hud.fillStyle = 'rgba(242,230,208,0.14)';
+  hud.fillRect(x, y, w, 3);
+  const fw = Math.round(w * clamp(frac, 0, 1));
+  if (fw > 0) { hud.fillStyle = col; hud.fillRect(x, y, fw, 3); }
+}
+
 /* ---------- small widgets ---------- */
 // Horizontal gauge with a label, a value readout and an optional overheat tint.
 function drawGauge(x, y, w, h, frac, col, bg) {
@@ -153,45 +180,54 @@ function drawRadar(cx, cy, r) {
 
 /* ---------- title ---------- */
 function drawTitleScreen() {
-  hud.fillStyle = 'rgba(6,4,12,0.32)';
+  // Left-anchored type over the scenery, with a soft side scrim for legibility.
+  const side = hud.createLinearGradient(0, 0, W * 0.72, 0);
+  side.addColorStop(0, 'rgba(8,6,14,0.78)');
+  side.addColorStop(0.55, 'rgba(8,6,14,0.30)');
+  side.addColorStop(1, 'rgba(8,6,14,0.0)');
+  hud.fillStyle = side;
   hud.fillRect(0, 0, W, H);
-  const tw = textWidth('DUSK PATROL', 3, 2);
-  const tx = Math.round((W - tw) / 2);
-  drawText('DUSK PATROL', tx + 2, 40, COL.dark, 3, 2);
-  drawText('DUSK PATROL', tx, 37, COL.amber, 3, 2);
-  hud.fillStyle = 'rgba(255,180,92,0.5)';
-  hud.fillRect(160, 74, 160, 1);
-  drawTextC('ENDLESS WAVE CAMPAIGN', 240, 82, COL.bone, 1, 0);
-  drawTextC('BEST  ' + pad(game.best, 6) + '   WAVE  ' + campaign.bestWave, 240, 96, COL.amber, 1, 0);
-  if (blinkOn(3.4)) drawTextC(touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY', 240, 122, COL.bone, 1, 1);
+  const bottom = hud.createLinearGradient(0, H - 66, 0, H);
+  bottom.addColorStop(0, 'rgba(8,6,14,0)');
+  bottom.addColorStop(1, 'rgba(8,6,14,0.82)');
+  hud.fillStyle = bottom;
+  hud.fillRect(0, H - 66, W, 66);
 
-  hud.fillStyle = 'rgba(8,6,16,0.45)';
-  hud.fillRect(64, 146, 352, 96);
-  hud.fillStyle = 'rgba(255,180,92,0.25)';
-  hud.fillRect(64, 146, 352, 1);
+  // Small sector chip over the title, like a mission slate.
+  const chipW = textWidth('ENDLESS WAVE CAMPAIGN', 1, 1) + 12;
+  hud.fillStyle = 'rgba(12,10,20,0.72)';
+  hud.fillRect(28, 96, chipW, 13);
+  hud.fillStyle = 'rgba(255,180,92,0.55)';
+  hud.fillRect(28, 96, 2, 13);
+  drawText('ENDLESS WAVE CAMPAIGN', 36, 99, COL.bone, 1, 1);
+
+  drawText('DUSK', 28, 118, 'rgba(24,8,14,0.92)', 4, 1);
+  drawText('DUSK', 26, 115, COL.amber, 4, 1);
+  drawText('PATROL', 28, 160, 'rgba(24,8,14,0.92)', 4, 1);
+  drawText('PATROL', 26, 157, COL.bone, 4, 1);
+
+  hud.fillStyle = 'rgba(255,180,92,0.65)';
+  hud.fillRect(28, 198, 96, 1);
+  drawText('BEST ' + pad(game.best, 6) + '    WAVE ' + campaign.bestWave, 28, 205, COL.dim, 1, 1);
+
+  const prompt = touch.on ? 'TAP TO FLY' : 'PRESS ENTER TO FLY';
+  if (blinkOn(3.4)) {
+    drawText(prompt, 28, 222, COL.amber, 1, 1);
+    hud.fillStyle = COL.amber;
+    hud.beginPath(); hud.moveTo(22, 222); hud.lineTo(22, 228); hud.lineTo(27, 225); hud.closePath(); hud.fill();
+  }
+
+  // Controls live in the bottom strip, so the landscape stays readable.
+  drawBarsTopBottom();
+  hud.fillStyle = 'rgba(10,8,16,0.55)';
+  hud.fillRect(0, H - 28, W, 13);
   if (touch.on) {
-    drawTextSh('LEFT STICK', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
-    drawTextSh('FIRE', 76, 168, COL.amber, 1, 0); drawTextSh('HOLD: AUTOCANNON', 178, 168, COL.bone, 1, 0);
-    drawTextSh('MSL', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE LOCK', 178, 180, COL.bone, 1, 0);
-    drawTextSh('FLARE', 76, 192, COL.amber, 1, 0); drawTextSh('BREAK LOCK', 178, 192, COL.bone, 1, 0);
-    drawTextSh('BOOST', 262, 156, COL.amber, 1, 0); drawTextSh('AFTERBURNER', 322, 156, COL.bone, 1, 0);
-    drawTextSh('ROLL', 262, 168, COL.amber, 1, 0); drawTextSh('DODGE', 322, 168, COL.bone, 1, 0);
-    drawTextSh('CAM', 262, 180, COL.amber, 1, 0); drawTextSh('VIEW', 322, 180, COL.bone, 1, 0);
-    drawTextSh('II', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE', 322, 192, COL.bone, 1, 0);
-    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS' : 'CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
-    drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
+    drawTextC(innerHeight > innerWidth ? 'TURN YOUR PHONE SIDEWAYS' : 'STICK FLY   FIRE   MSL   FLARE   BOOST   ROLL   CAM', 240, H - 11, COL.bone, 1, 0);
+    drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, H - 24, COL.dim, 1, 0);
     return;
   }
-  drawTextSh('WASD / ARROWS', 76, 156, COL.amber, 1, 0); drawTextSh('FLY / LOOP', 178, 156, COL.bone, 1, 0);
-  drawTextSh('SPACE / LMB', 76, 168, COL.amber, 1, 0); drawTextSh('AUTOCANNON', 178, 168, COL.bone, 1, 0);
-  drawTextSh('F / RMB', 76, 180, COL.amber, 1, 0); drawTextSh('MISSILE', 178, 180, COL.bone, 1, 0);
-  drawTextSh('X', 76, 192, COL.amber, 1, 0); drawTextSh('FLARES', 178, 192, COL.bone, 1, 0);
-  drawTextSh('SHIFT', 262, 156, COL.amber, 1, 0); drawTextSh('BOOST', 322, 156, COL.bone, 1, 0);
-  drawTextSh('B / 2X A,D', 262, 168, COL.amber, 1, 0); drawTextSh('ROLL', 336, 168, COL.bone, 1, 0);
-  drawTextSh('C / 1-4', 262, 180, COL.amber, 1, 0); drawTextSh('CAMERA', 322, 180, COL.bone, 1, 0);
-  drawTextSh('P / M / R', 262, 192, COL.amber, 1, 0); drawTextSh('PAUSE MUTE RETRY', 322, 192, COL.bone, 1, 0);
-  drawTextC('CLEAR EVERY WAVE. A CARRIER GUARDS EVERY 5TH.', 240, 214, COL.dim, 1, 0);
-  drawTextC('EACH WAVE CLEARED, PICK ONE UPGRADE', 240, 228, COL.dim, 1, 0);
+  drawTextC('WASD FLY   SPACE FIRE   F MSL   X FLARE   SHIFT BOOST   B ROLL   C CAM', 240, H - 11, COL.bone, 1, 0);
+  drawTextC('P PAUSE   M MUTE   R RETRY     CLEAR EVERY WAVE, THEN PICK ONE UPGRADE', 240, H - 24, COL.dim, 1, 0);
 }
 
 /* ---------- cockpit (pixel-art canopy, HUD combiner & instrument dash) ---------- */
@@ -557,28 +593,33 @@ function drawCockpitFrame() {
 /* ---------- flight HUD ---------- */
 function drawBars() {
   const m = game.mods;
-  // Hull and shield, bottom-left.
-  drawTextSh('HULL ' + Math.ceil(game.hull), 8, 224, game.hull / m.hullMax > 0.3 ? COL.bone : COL.red, 1, 0);
-  drawGauge(8, 234, 78, 4, game.hull / m.hullMax, game.hull / m.hullMax > 0.3 ? '#5ee0d0' : '#ff5a5f');
-  drawGauge(8, 242, 78, 3, game.shield / m.shieldMax, '#5fa8ff');
+  // Hull and shield, bottom-left, on a dark plate so they read over any terrain.
+  hud.fillStyle = 'rgba(12,10,20,0.58)';
+  hud.fillRect(6, 221, 112, 31);
+  hud.fillStyle = 'rgba(255,180,92,0.24)';
+  hud.fillRect(6, 221, 112, 1);
+  drawText('HULL ' + Math.ceil(game.hull), 10, 225, game.hull / m.hullMax > 0.3 ? COL.bone : COL.red, 1, 0);
+  drawText('SHLD', 74, 225, COL.dim, 1, 0);
+  drawMiniBar(10, 234, 104, game.hull / m.hullMax, game.hull / m.hullMax > 0.3 ? '#63e2d2' : '#ff5a5f');
+  drawMiniBar(10, 240, 104, game.shield / m.shieldMax, '#6fb6ff');
 
-  // Heat, bottom-right, under the radar.
+  // Heat, tucked into the bottom bar between the camera tag and the weapon readout.
   const heat = weapons.heat / 100;
   const over = weapons.overheated;
-  drawTextR(over ? 'OVERHEAT' : 'HEAT', 472, 232, over ? COL.red : COL.dim, 1, 0);
-  drawGauge(394, 242, 78, 4, heat, over ? (blinkOn(14) ? '#ff5a5f' : '#ffb45c') : heat > 0.7 ? '#ffb45c' : '#f2e6d0');
+  drawText('HEAT', 140, 258, over ? COL.red : COL.dim, 1, 0);
+  drawMiniBar(170, 266, 62, heat, over ? (blinkOn(14) ? '#ff5a5f' : '#ffb45c') : heat > 0.7 ? '#ffb45c' : '#f2e6d0');
+  if (over) drawTextC('OVERHEAT', 240, 246, blinkOn(14) ? COL.red : COL.dim, 1, 1);
 }
 
 function drawWaveInfo() {
-  drawTextSh('WAVE ' + campaign.wave, 8, 6, COL.amber, 1, 0);
   const left = campaign.queue.length + aliveEnemies();
-  drawTextSh(campaign.bossWave ? 'BOSS' : left + ' LEFT', 8, 18, campaign.bossWave ? COL.red : COL.dim, 1, 0);
+  drawChip(8, 19, campaign.bossWave ? 'BOSS WAVE' : 'WAVE ' + pad(campaign.wave, 2) + '   ' + left + ' LEFT',
+    campaign.bossWave ? COL.red : COL.bone, 'left');
   if (campaign.boss && campaign.boss.alive) {
     const b = campaign.boss;
     const f = clamp(b.hp / b.maxHp, 0, 1);
-    const w = 150;
-    drawGauge(Math.round(240 - w / 2), 32, w, 4, f, f > 0.5 ? '#ff8a5c' : '#ff5a5f', 'rgba(8,6,16,0.7)');
-    drawTextC('CARRIER', 240, 40, COL.red, 1, 0);
+    drawText('CARRIER', 8, 35, COL.red, 1, 1);
+    drawMiniBar(52, 36, 92, f, f > 0.5 ? '#ff8a5c' : '#ff5a5f');
   }
 }
 
@@ -601,39 +642,43 @@ function drawPlayHUD() {
     drawCockpitProjector();
     drawCockpitFrame();
   } else {
-    hud.fillStyle = 'rgba(8,6,16,0.34)';
-    hud.fillRect(0, H - 14, W, 14);
+    drawBarsTopBottom();
   }
 
   const camName = ['CHASE', 'FPV', 'TOP', 'CINEMA'][game.camMode];
-  if (!fpv) drawTextSh('DP ' + camName, 8, 258, COL.dim, 1, 0);
-
   drawWaveInfo();
-  drawTextC(pad(game.score, 6), 240, 2, COL.amber, 2, 0);
-  if (game.combo > 1) {
-    drawTextC('X' + game.combo + ' COMBO', 240, 20, blinkOn(10) ? COL.amber : COL.bone, 1, 0);
-  }
-  drawTextR('BEST ' + pad(game.best, 6), 472, 6, COL.dim, 1, 0);
+  if (!fpv) drawChip(472, 19, camName, COL.dim, 'right');
+  drawTextC(pad(game.score, 6), 240, 0, COL.amber, 2, 1);
+  drawText('DUSK PATROL', 17, 4, COL.bone, 1, 1);
+  hud.fillStyle = COL.amber;
+  hud.beginPath(); hud.moveTo(8, 4); hud.lineTo(14, 7.5); hud.lineTo(8, 11); hud.closePath(); hud.fill();
+  drawTextR('BEST ' + pad(game.best, 6), 472, 4, COL.dim, 1, 0);
+
   if (!fpv) {
-    drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax, 472, 18, weapons.ammo ? COL.bone : COL.red, 1, 0);
-    drawTextR('FLR ' + weapons.flares, 472, 30, weapons.flares ? COL.bone : COL.dim, 1, 0);
     const ready = weapons.rollCd <= 0;
-    drawTextR('ROLL', 446, 42, ready ? COL.amber : COL.dim, 1, 0);
-    drawGauge(450, 44, 22, 3, ready ? 1 : clamp(1 - weapons.rollCd / game.mods.rollCd, 0, 1), ready ? '#ffb45c' : '#8f84a2');
+    drawText('DP ' + camName, 8, 258, COL.dim, 1, 1);
+    drawText('ROLL', 300, 258, ready ? COL.amber : COL.dim, 1, 0);
+    drawMiniBar(302, 266, 34, ready ? 1 : clamp(1 - weapons.rollCd / game.mods.rollCd, 0, 1), ready ? '#ffb45c' : '#8f84a2');
+    drawTextR('MSL ' + weapons.ammo + '/' + game.mods.missileMax + '   FLR ' + weapons.flares, 472, 258,
+      weapons.ammo ? COL.bone : COL.dim, 1, 0);
 
     drawBars();
-    drawRadar(W - 40, H - 66, 27);
+    drawRadar(W - 40, H - 66, 26);
+  }
+
+  if (game.combo > 1) {
+    drawTextC('X' + game.combo + ' COMBO', 240, 246, blinkOn(10) ? COL.amber : COL.bone, 1, 1);
   }
 
   if (plane.alive) {
-    let wy = (campaign.boss && campaign.boss.alive) ? 50 : (fpv ? 34 : 46);
+    let wy = (campaign.boss && campaign.boss.alive) ? 52 : (fpv ? 34 : 48);
     const warn = (text, color) => { drawTextC(text, 240, wy, color, 1, 1); wy += 12; };
     if (plane.agl < 45 && flightForward()[1] < -0.05 && blinkOn(8)) warn('PULL UP', COL.red);
     if (plane.edge > BOUNDARY_WARN && blinkOn(4)) warn('RETURN TO PATROL AREA', COL.red);
     planeMatrix(camMat, plane.pos, plane.yaw, plane.pitch, planeVisualRoll());
     if (camMat[5] < -0.3 && plane.barrelT <= 0) warn('INVERTED', COL.amber);
   }
-  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 216, COL.dim, 1, 0);
+  if (game.debug) drawTextSh('FPS ' + Math.round(game.fps) + '  E ' + aliveEnemies() + '  Q ' + campaign.queue.length + '  CH ' + game.visibleChunks + '/64', 8, 214, COL.dim, 1, 0);
 
   if (!fpv && game.camMode !== 2) drawReticle();
   drawTargetBox();

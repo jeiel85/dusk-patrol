@@ -26,8 +26,8 @@ function drawSky() {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-const SOLID_SUN = [1.0, 0.78, 0.50], SOLID_AMB = [0.44, 0.42, 0.64];
-const JET_SUN = [1.0, 0.84, 0.60], JET_AMB = [0.60, 0.58, 0.76];
+const SOLID_SUN = [1.02, 0.86, 0.63], SOLID_AMB = [0.62, 0.57, 0.74];
+const JET_SUN = [1.06, 0.93, 0.74], JET_AMB = [0.70, 0.68, 0.72];
 const shadowM = m4();
 function beginSolid() {
   gl.useProgram(solidProg);
@@ -71,6 +71,19 @@ function drawWater() {
   gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
 
+// Tree / scrub specks: one static point cloud, depth-tested against the land.
+function drawScenery() {
+  gl.useProgram(pointProg);
+  gl.uniformMatrix4fv(U(pointProg, 'uVP'), false, vpM);
+  gl.uniform3fv(U(pointProg, 'uCam'), cam.pos);
+  gl.uniform1f(U(pointProg, 'uTime'), 0);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.bindVertexArray(sceneryVao);
+  gl.drawArrays(gl.POINTS, 0, treePoints.length);
+  gl.disable(gl.BLEND);
+}
+
 function drawCity() {
   gl.useProgram(cityProg);
   gl.uniformMatrix4fv(U(cityProg, 'uVP'), false, vpM);
@@ -93,7 +106,7 @@ function drawShadows() {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthMask(false);
 
-  // Projected cloud shadows on sea / coastal plains.
+  // Projected cloud shadows on land.
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudShadowVao);
   gl.uniform1f(U(shadowProg, 'uUseTex'), 1.0);
@@ -106,12 +119,13 @@ function drawShadows() {
     if (dx * dx + dz * dz > 2800 * 2800) continue;
     const rad = c.sx * 0.92, rz = c.sy * 1.45;
     const gh = terrainHeight(sx, sz);
-    if (gh > 42) continue;
-    const sy = Math.max(gh, 0) + 0.55;
+    if (gh < 2) continue; // keep the sea clean: no hard-edged cloud shadows on water
+    if (gh > c.y - 30) continue; // a cloud cannot shadow ground above it
+    const sy = gh + 0.55;
     if (!sphereInFrustum(sx, sy, sz, Math.max(rad, rz))) continue;
     const dist = Math.hypot(dx, sy - cam.pos[1], dz);
     if (dist > 2800) continue;
-    const alpha = 0.28 * (1 - smoothstep(1400, 2800, dist));
+    const alpha = 0.17 * (1 - smoothstep(1400, 2800, dist));
     if (alpha < 0.02) continue;
     m4id(shadowM);
     shadowM[0] = rad; shadowM[10] = rz;
@@ -182,8 +196,8 @@ function drawTrails() {
     for (let i = 0; i < tr.length - 1; i++) {
       if (q >= TRAIL_QUAD_MAX) break;
       const a = tr[i], b = tr[i + 1];
-      const ta = clamp(1 - a.age / 1.35, 0, 1);
-      const tb = clamp(1 - b.age / 1.35, 0, 1);
+      const ta = clamp(1 - a.age / 2.2, 0, 1);
+      const tb = clamp(1 - b.age / 2.2, 0, 1);
       if (ta <= 0.01 && tb <= 0.01) continue;
       // Camera-facing ribbon cross axis so trails stay crisp in Chase, Overhead & Cinema.
       const tx = b.p[0] - a.p[0], ty = b.p[1] - a.p[1], tz = b.p[2] - a.p[2];
@@ -199,24 +213,24 @@ function drawTrails() {
       // Scale ribbon width gently when far (Overhead view) while keeping close chase trails razor-crisp.
       const farScale = clamp(distA / 48, 0.75, 2.4);
       const wa = a.w * farScale * (0.35 + 0.65 * ta), wb = b.w * farScale * (0.35 + 0.65 * tb);
-      const aa = a.a * ta * ta * nearA, ab = b.a * tb * tb * nearB;
+      const aa = a.a * ta * nearA, ab = b.a * tb * nearB;
       const ax0 = a.p[0] - sx * wa, ay0 = a.p[1] - sy * wa, az0 = a.p[2] - sz * wa;
       const ax1 = a.p[0] + sx * wa, ay1 = a.p[1] + sy * wa, az1 = a.p[2] + sz * wa;
       const bx0 = b.p[0] - sx * wb, by0 = b.p[1] - sy * wb, bz0 = b.p[2] - sz * wb;
       const bx1 = b.p[0] + sx * wb, by1 = b.p[1] + sy * wb, bz1 = b.p[2] + sz * wb;
       let o = q * 42;
       trailData[o] = ax0; trailData[o + 1] = ay0; trailData[o + 2] = az0;
-      trailData[o + 3] = 1.0; trailData[o + 4] = 0.96; trailData[o + 5] = 0.90; trailData[o + 6] = aa;
+      trailData[o + 3] = 1.0; trailData[o + 4] = 0.99; trailData[o + 5] = 0.96; trailData[o + 6] = aa;
       trailData[o + 7] = ax1; trailData[o + 8] = ay1; trailData[o + 9] = az1;
-      trailData[o + 10] = 1.0; trailData[o + 11] = 0.96; trailData[o + 12] = 0.90; trailData[o + 13] = aa;
+      trailData[o + 10] = 1.0; trailData[o + 11] = 0.99; trailData[o + 12] = 0.96; trailData[o + 13] = aa;
       trailData[o + 14] = bx1; trailData[o + 15] = by1; trailData[o + 16] = bz1;
-      trailData[o + 17] = 1.0; trailData[o + 18] = 0.96; trailData[o + 19] = 0.90; trailData[o + 20] = ab;
+      trailData[o + 17] = 1.0; trailData[o + 18] = 0.99; trailData[o + 19] = 0.96; trailData[o + 20] = ab;
       trailData[o + 21] = ax0; trailData[o + 22] = ay0; trailData[o + 23] = az0;
-      trailData[o + 24] = 1.0; trailData[o + 25] = 0.96; trailData[o + 26] = 0.90; trailData[o + 27] = aa;
+      trailData[o + 24] = 1.0; trailData[o + 25] = 0.99; trailData[o + 26] = 0.96; trailData[o + 27] = aa;
       trailData[o + 28] = bx1; trailData[o + 29] = by1; trailData[o + 30] = bz1;
-      trailData[o + 31] = 1.0; trailData[o + 32] = 0.96; trailData[o + 33] = 0.90; trailData[o + 34] = ab;
+      trailData[o + 31] = 1.0; trailData[o + 32] = 0.99; trailData[o + 33] = 0.96; trailData[o + 34] = ab;
       trailData[o + 35] = bx0; trailData[o + 36] = by0; trailData[o + 37] = bz0;
-      trailData[o + 38] = 1.0; trailData[o + 39] = 0.96; trailData[o + 40] = 0.90; trailData[o + 41] = ab;
+      trailData[o + 38] = 1.0; trailData[o + 39] = 0.99; trailData[o + 40] = 0.96; trailData[o + 41] = ab;
       q++;
     }
   }
@@ -275,23 +289,40 @@ function drawClouds() {
   gl.uniform1f(U(cloudProg, 'uFogDensity'), FOG_DENS);
   gl.uniform3fv(U(cloudProg, 'uCam'), cam.pos);
   gl.uniform1i(U(cloudProg, 'uTex'), 0);
-  gl.uniform3fv(U(cloudProg, 'uShade'), [0.40, 0.32, 0.48]);
+  gl.uniform3fv(U(cloudProg, 'uShade'), [0.74, 0.67, 0.79]);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(cloudVao);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  const halfTan = Math.tan(cam.fov * DEG * 0.5);
   for (const c of cloudDefs) {
     const cx = c.x + Math.sin(game.time * 0.01 + c.drift) * 25;
+    const dx = cx - cam.pos[0], dy = c.y - cam.pos[1], dz = c.z - cam.pos[2];
+    const dist = Math.hypot(dx, dy, dz);
+    // A card the camera is inside reads as a screen-filling white wall; skip it.
+    if (dist < Math.max(c.sx, c.sy) * 0.85) continue;
     if (!sphereInFrustum(cx, c.y, c.z, Math.hypot(c.sx, c.sy))) continue;
+    // Fade a card out as its projection passes a comfortable size: an
+    // oversized billboard reads as flat fog, not as a cloud.
+    const over = Math.max(
+      (c.sy / dist) / (halfTan * 0.95),
+      (c.sx / dist) / (halfTan * (W / H) * 1.15)
+    );
+    const fade = clamp((1.0 - over) / 0.30, 0.0, 1.0);
+    if (fade <= 0.02) continue;
+    gl.uniform1f(U(cloudProg, 'uAlpha'), fade);
     // Spherical billboarding keeps clouds volumetric from Overhead, Chase and Cockpit views.
     cloudM[0] = camRight[0] * c.sx; cloudM[1] = camRight[1] * c.sx; cloudM[2] = camRight[2] * c.sx; cloudM[3] = 0;
     cloudM[4] = camUp[0] * c.sy;    cloudM[5] = camUp[1] * c.sy;    cloudM[6] = camUp[2] * c.sy;    cloudM[7] = 0;
     cloudM[8] = 0; cloudM[9] = 0; cloudM[10] = 0; cloudM[11] = 0;
     cloudM[12] = cx; cloudM[13] = c.y; cloudM[14] = c.z; cloudM[15] = 1;
     gl.uniformMatrix4fv(U(cloudProg, 'uModel'), false, cloudM);
-    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.08; cloudTint[2] = 0.78;
+    cloudTint[0] = 1.0; cloudTint[1] = c.tintY + 0.06; cloudTint[2] = 0.94;
     gl.uniform3fv(U(cloudProg, 'uTint'), cloudTint);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexes[c.tex]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
+  gl.disable(gl.BLEND);
 }
 
 const PT_LIGHT = [1.0, 0.60, 0.26], PT_DRONE = [1.0, 0.18, 0.12], PT_MISSILE = [1.0, 0.86, 0.55];
@@ -445,13 +476,17 @@ function renderScene() {
 
   drawTerrain();
   drawWater();
+  drawScenery();
   drawShadows();
   drawCity();
   const showJet = plane.alive && !(game.state !== 'title' && game.camMode === 1);
   if (showJet) drawJet();
   drawEnemies();
-  drawClouds();
-  if (game.state === 'title' || game.camMode !== 1) drawTrails();
+  // Overhead is a clean tactical map: clouds seen from above read as flat cards.
+  if (game.camMode !== 2) drawClouds();
+  // World-space ribbons balloon as they cross the near plane, so contrails only
+  // render from the high/side cameras where the whole trail is readable.
+  if (game.state !== 'title' && game.camMode >= 2) drawTrails();
 
   const pn = buildPoints();
   drawPoints(pn);
